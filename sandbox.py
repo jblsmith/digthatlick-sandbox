@@ -1,7 +1,7 @@
 import tracker
 reload(tracker)
 self = tracker.Beat()
-self.set_index(9)
+self.set_index(3)
 self.estimate_beats('qm')
 self.estimate_beats('essentia')
 self.estimate_beats('madmom')
@@ -12,28 +12,126 @@ self.write_downbeats('qm')
 self.write_downbeats('madmom')
 
 
-import tracker
+# Code to run all estimators on Jazzomat database and save the outputs
+reload(tracker)
 beat = tracker.Beat()
-for i in range(3,60):
+for ind in beat.data.index:
 	try:
+		# Load audio
 		beat.set_index(i)
+		# Run estimators
 		beat.run_estimates()
+		# Write outputs to files
+		beat.write_all_rhythms()
 	except:
 		print "Failed for " + str(i)
 
-
+# Code to load outputs into memory, evaluate them, and save all evaluation scores
 reload(tracker)
 beat = tracker.Beat()
 score_list = []
-for ind in range(10,44):
-	beat.set_index(ind)
+for ind in beat.data.index:
+	print ind
+	beat.load_true_beats_and_downbeats(ind)
+	beat.ind = ind
 	beat.load_estimates(ind)
-	scores = beat.eval_downbeats(ind)
-	score_list += [np.array(scores)]
+	b_scores, db_scores = beat.evaluate_estimates(ind)
+	score_list += [(b_scores, db_scores)]
 
-np.mean(np.array(score_list),axis=0)
-np.max(np.array(score_list),axis=0)
-np.median(np.array(score_list),axis=0)
+beat_results = np.array(zip(*score_list)[0])
+dbeat_results = np.array(zip(*score_list)[1])
+print np.mean(beat_results,axis=0)
+print np.mean(dbeat_results,axis=0)
+print np.median(beat_results,axis=0)
+print np.median(dbeat_results,axis=0)
+np.max(beat_results,axis=0)
+np.max(dbeat_results,axis=0)
+
+all_results = np.concatenate((beat_results, dbeat_results),axis=1)
+beat.data['Decade'] = ((beat.data.Year-1900)/10).astype(int)
+algo_names = ['QM_beat', 'MM_beat', 'ES_beat', 'QM_downbeat', 'MM_downbeat']
+metric_names = ['fmeas','goto','p','info','cemg','cemgmax','CMLc','CMLt','AMLc','AMLt']
+meta_columns_of_interest = ['Inst.','Style','Decade']
+A = algo_names*len(metric_names)
+B = [[n]*len(algo_names) for n in metric_names]
+B = [item for sublist in B for item in sublist]
+
+
+
+
+data = beat.data.copy()
+data = data.iloc[:-1,:]
+all_results_table = np.concatenate([all_results[:,:,i] for i in range(all_results.shape[2])],axis=1)
+all_results_cols = [algo_names[j] + "_" + metric_names[i] for i in range(all_results.shape[2]) for j in range(all_results.shape[1])]
+for i,colname in enumerate(all_results_cols):
+	data[colname] = all_results_table[:,i]
+
+for j,tmp_range in enumerate([[range(4)], [range(4,6)], [range(6,10)]]):
+	plt.clf()
+	tmp_rows = [data.mean()[5+i*len(algo_names):10+i*len(algo_names)] for i in tmp_range[0]]
+	new_df = pd.DataFrame(np.array(tmp_rows), columns=algo_names, index=[metric_names[i] for i in tmp_range[0]])
+	new_df.transpose().plot()
+	plt.title('Average metric for all algos and both metric levels (set ' + str(j) + ')')
+	axes = plt.gca()
+	axes.set_ylim([0,1])
+	plt.savefig('Metric_set_' + str(j) + '.jpg')
+
+
+
+
+df = pd.DataFrame(data=all_results_table, columns=pd.MultiIndex.from_tuples(zip(A,B)))
+df_beat = pd.DataFrame(data=np.mean(all_results[:,:3,:],axis=1), columns=metric_names)
+df_dbeat = pd.DataFrame(data=np.mean(all_results[:,3:,:],axis=1), columns=metric_names)
+all_data_b = pd.concat((data,df_beat),axis=1)
+all_data_db = pd.concat((data,df_dbeat),axis=1)
+# all_data.groupby('Style').mean().iloc[:,4:].boxplot()
+
+plt.ion()
+# f = plt.figure(1)
+for var in ['Decade', 'Style', 'Inst.']:
+	plt.clf()
+	all_data_b.groupby(var).mean()[all_data.columns[10:14]].plot(xticks=range(len(np.unique(all_data[var]))-1))
+	plt.title('Average beat tracking success according to ' + var, color='black')
+	axes = plt.gca()
+	axes.set_ylim([0,1])
+	plt.savefig('Avg_by_' + var + '_BT-1.jpg')
+	plt.clf()
+	all_data_b.groupby(var).mean()[all_data.columns[14:]].plot(xticks=range(len(np.unique(all_data[var]))-1))
+	plt.title('Average beat tracking success according to ' + var, color='black')
+	axes = plt.gca()
+	axes.set_ylim([0,1])
+	plt.savefig('Avg_by_' + var + '_BT-2.jpg')
+	plt.clf()
+	all_data_db.groupby(var).mean()[all_data.columns[10:14]].plot(xticks=range(len(np.unique(all_data[var]))-1))
+	plt.title('Average downbeat tracking success according to ' + var, color='black')
+	axes = plt.gca()
+	axes.set_ylim([0,1])
+	plt.savefig('Avg_by_' + var + '_DBT-1.jpg')
+	plt.clf()
+	all_data_db.groupby(var).mean()[all_data.columns[14:]].plot(xticks=range(len(np.unique(all_data[var]))-1))
+	plt.title('Average downbeat tracking success according to ' + var, color='black')
+	axes = plt.gca()
+	axes.set_ylim([0,1])
+	plt.savefig('Avg_by_' + var + '_DBT-2.jpg')
+
+
+
+# Plot according to algirthm
+
+
+
+data = pd.DataFrame(columns=list(data.columns) + all_results_cols)
+data.loc[:,:9] = beat.data.copy()
+data.iloc[:,9:] = all_results_table
+data2 = pd.concat((data, pd.DataFrame(all_results_table)))
+, 
+import matplotlib.pyplot as plt
+plt.ion()
+
+
+
+plt.plot([np.])
+
 
 
 
@@ -386,3 +484,8 @@ def extractSvlAnnotRegionFile(filename):
         
     ## return the result:
     return parameters, frames, durations, labels, values
+
+
+
+bad_cases = np.where(self.data['orig_path'].isnull())[0]
+self.data.loc[bad_cases]

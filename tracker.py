@@ -39,7 +39,9 @@ class Beat(object):
 	def __init__(self):
 		self.data_dir = "/Users/jordan/Documents/data/WeimarJazzDatabase"
 		self.sv_dir = self.data_dir + "/annotations/SV/"
-		self.audio_dir = self.data_dir + "/audio/wav_orig/"
+		self.annotation_dir = self.data_dir + "/annotations/"
+		self.audio_orig_dir = self.data_dir + "/audio/wav_orig/"
+		self.audio_solo_dir = self.data_dir + "/audio/wav_solo/"
 		self.beats_dir = self.data_dir + "/annotations/beats/"
 		self.solo_dir = self.data_dir + "/annotations/solo/"
 		self.est_dir = self.data_dir + "/estimates/"
@@ -58,7 +60,7 @@ class Beat(object):
 	
 	def set_index(self, ind):
 		self.load_audio(ind)
-		self.load_beats(ind)
+		self.load_true_beats_and_downbeats(ind)
 		self.ind = ind
 	
 	def make_beat_path(self, beat_type = 0, extractor_type = 'madmom'):
@@ -67,6 +69,9 @@ class Beat(object):
 		elif beat_type == 1:
 			beat_string = 'downbeats'
 		return self.est_dir + extractor_type + "/" + str(self.ind) + "-" + beat_string + ".txt"
+	
+	def make_csv_path(self, extractor_type = 'madmom'):
+		return self.est_dir + extractor_type + "/" + str(self.ind) + ".csv"
 	
 	def make_pickle_path(self, extractor_type = "madmom"):
 		return self.est_dir + extractor_type + "/" + str(self.ind) + ".p"
@@ -84,14 +89,15 @@ class Beat(object):
 		data['Tempo'] = data['Tempo'].astype(float)
 		data['Tones'] = data['Tones'].astype(int)
 		data['orig_path'] = None
-		audio_filepaths = glob.glob(self.audio_dir + "*.wav")
+		audio_filepaths = glob.glob(self.audio_solo_dir + "*.wav")
 		audio_filenames = [os.path.basename(filename) for filename in audio_filepaths]
+		best_inds = np.zeros(len(data.index)).astype(int)
 		for i in data.index:
 			predicted_path = re.sub(" ","",data['Performer'][i]) + "_" + re.sub(" ","",data['Title'][i]) + "_Orig.wav"
 			edit_distances = [Levenshtein.distance(predicted_path,af) for af in audio_filenames]
-			if np.min(edit_distances)<10:
-				best_ind = np.argmin(edit_distances)
-				data['orig_path'][i] = audio_filenames[best_ind]
+			# if np.min(edit_distances)<10:
+			best_inds[i] = int(np.argmin(edit_distances))
+		data['orig_path'] = [audio_filenames[i] for i in best_inds]
 		data.index = [int(i) for i in data['Ind']]
 		self.data = data
 	
@@ -99,7 +105,7 @@ class Beat(object):
 		print "Loading beats."
 		beat_file_path = self.beats_dir + str(ind) + ".csv"
 		rhythm_data = self.read_csv_format(beat_file_path)
-		self.true_rhythm_data = rhythm_data
+		self.rhythm_data['true'] = rhythm_data
 		# beat_table = open(beat_file_path,'r').readlines()
 		# header = beat_table[0].strip().split(",")
 		# datarows = [line.strip().split(",") for line in beat_table[1:]]
@@ -113,6 +119,27 @@ class Beat(object):
 		# for i in range(len(onset)-1):
 		# 	self.true_t += list(np.linspace(self.true_dt[i],self.true_dt[i+1],5)[:-1])
 		# self.true_beats = {'db':downbeat, 'b':beat, 'ons':onset}
+	
+	def load_true_beats_and_downbeats(self, ind):
+		print "Loading beats and downbeats."
+		beat_file_path = self.annotation_dir + "magdalena/beat/" + str(ind) + ".txt"
+		downbeat_file_path = self.annotation_dir + "magdalena/downbeat/" + str(ind) + ".txt"
+		beat_list = list(pd.read_csv(beat_file_path,header=-1)[0])
+		downbeat_list = list(pd.read_csv(downbeat_file_path,header=-1)[0])
+		downbeat_inds = [i for i in range(len(beat_list)) if np.min(np.abs(beat_list[i]-np.array(downbeat_list)))<0.001]
+		beat_labels = np.zeros(len(beat_list)).astype(int)
+		beat_labels[downbeat_inds]=1
+		for i in range(1,len(beat_labels)-1):
+			if beat_labels[i]==0:
+				beat_labels[i]=beat_labels[i-1]+1
+
+		new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
+		new_rhythm_data.onset = beat_list
+		new_rhythm_data.beat = beat_labels
+		bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
+		new_rhythm_data.bar[0] = 0
+		new_rhythm_data.bar[1:] = bars
+		self.rhythm_data['true'] = new_rhythm_data		
 
 	def load_audio(self, ind=None, abspath=None):
 		print "Loading audio..."
@@ -120,7 +147,7 @@ class Beat(object):
 			self.signal, self.fs = librosa.core.load(abspath, sr=self.fs, mono=False)
 			print "Loaded audio."
 		elif ind is not None:
-			audiopath = self.audio_dir + self.data['orig_path'][ind]
+			audiopath = self.audio_solo_dir + self.data['orig_path'][ind]
 			if audiopath is not None:
 				self.signal, self.fs = librosa.core.load(audiopath, sr=self.fs, mono=False)
 			else:
@@ -188,7 +215,8 @@ class Beat(object):
 		csv_data['onset'] = csv_data['onset'].astype(float)
 		return csv_data
 	
-	def write_csv_format(self, extractor, write_path):
+	def write_csv_format(self, extractor):
+		write_path = self.make_csv_path(extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
 			self.rhythm_data[extractor].to_csv(filehandle, index=False)
 	
@@ -207,9 +235,9 @@ class Beat(object):
 		# self.estimate_beats_qm()
 		# self.estimate_beats_essentia()
 		# self.estimate_beats_madmom()
-		self.estimate_beats(extractor='qm')
-		self.estimate_beats(extractor='essentia')
-		self.estimate_beats(extractor='madmom')
+		self.estimate_beats(extractor_type='qm')
+		self.estimate_beats(extractor_type='essentia')
+		self.estimate_beats(extractor_type='madmom')
 	
 	def write_all_rhythms(self):
 		self.write_beats('qm')
@@ -217,34 +245,58 @@ class Beat(object):
 		self.write_beats('madmom')
 		self.write_downbeats('qm')
 		self.write_downbeats('madmom')
+		self.write_csv_format('qm')
+		self.write_csv_format('essentia')
+		self.write_csv_format('madmom')
 	
 	def load_estimates(self, ind):
-		if os.path.exists(self.qm_path):
-			with open(self.qm_path,'r') as filehandle:
-				qm_pickle = pickle.load(filehandle)
-				self.qm_t = qm_pickle['beat']
-				self.qm_dt = qm_pickle['downbeat']
-				self.qm_b = qm_pickle['labels']
-		if os.path.exists(self.es_path):
-			with open(self.es_path,'r') as filehandle:
-				es_pickle = pickle.load(filehandle)
-				self.es_t = es_pickle['beat']
-		if os.path.exists(self.mm_path):
-			with open(self.mm_path,'r') as filehandle:
-				mm_pickle = pickle.load(filehandle)
-				self.mm_t = mm_pickle['beat']
-				self.mm_dt = mm_pickle['downbeat']
-				self.mm_b = mm_pickle['labels']
+		for extractor_type in ['qm','essentia','madmom']:
+			csv_path = self.make_csv_path(extractor_type)
+			tmp_rhythm_data = self.read_csv_format(csv_path)
+			self.rhythm_data[extractor_type] = tmp_rhythm_data
+	#
+	# def load_estimates(self, ind):
+	# 	if os.path.exists(self.qm_path):
+	# 		with open(self.qm_path,'r') as filehandle:
+	# 			qm_pickle = pickle.load(filehandle)
+	# 			self.qm_t = qm_pickle['beat']
+	# 			self.qm_dt = qm_pickle['downbeat']
+	# 			self.qm_b = qm_pickle['labels']
+	# 	if os.path.exists(self.es_path):
+	# 		with open(self.es_path,'r') as filehandle:
+	# 			es_pickle = pickle.load(filehandle)
+	# 			self.es_t = es_pickle['beat']
+	# 	if os.path.exists(self.mm_path):
+	# 		with open(self.mm_path,'r') as filehandle:
+	# 			mm_pickle = pickle.load(filehandle)
+	# 			self.mm_t = mm_pickle['beat']
+	# 			self.mm_dt = mm_pickle['downbeat']
+	# 			self.mm_b = mm_pickle['labels']
 	
 	def evaluate_estimates(self, ind):
-		est_beat_opts = [self.qm_t, self.es_t, self.mm_t, self.qm_dt, self.mm_dt]
-		ref_beat_opts = [self.true_t, self.true_t, self.true_t, self.true_dt, self.true_dt]
-		scores = [self.get_scores(np.array(ref_beat_opts[i]), np.array(est_beat_opts[i])) for i in range(len(est_beat_opts))]
+		# beat_scores = []
+		# dbeat_scores = []
+		ref_beats = np.array(self.rhythm_data['true']['onset'])
+		ref_dbeats = np.array(self.rhythm_data['true']['onset'][self.rhythm_data['true']['beat']==1])
+		# Evaluate beats
+		b_scores = []
+		for ext in ['qm','madmom','essentia']:
+			est_beats = np.array(self.rhythm_data[ext]['onset'])
+			b_scores += [self.get_scores(ref_beats, est_beats)]
+		# Evaluate downbeats:
+		db_scores = []
+		for ext in ['qm','madmom']:
+			est_dbeats = np.array(self.rhythm_data[ext]['onset'][self.rhythm_data[ext]['beat']==1])
+			db_scores += [self.get_scores(ref_dbeats, est_dbeats)]
+		#
+		# est_beat_opts = [self.qm_t, self.es_t, self.mm_t, self.qm_dt, self.mm_dt]
+		# ref_beat_opts = [self.true_t, self.true_t, self.true_t, self.true_dt, self.true_dt]
+		# scores = [self.get_scores(np.array(ref_beat_opts[i]), np.array(est_beat_opts[i])) for i in range(len(est_beat_opts))]
 		# for i in range(len(est_beat_opts)):
 		# 	est_beats = est_beat_opts[i]
 		# 	ref_beats = ref_beat_opts[i]
 		# 	score_i = get_scores(ref_beats, est_beats)		
-		return scores
+		return b_scores, db_scores
 	
 	def eval_downbeats(self, ind):
 		est_beat_opts = [self.qm_dt, self.mm_dt]
@@ -263,7 +315,7 @@ class Beat(object):
 		p_score = mir_eval.beat.p_score(ref_beats, est_beats)
 		continuity = mir_eval.beat.continuity(ref_beats, est_beats)
 		information_gain = mir_eval.beat.information_gain(ref_beats, est_beats)
-		scores_list = [f_measure, goto, p_score, information_gain]
+		scores_list = [f_measure, goto, p_score, information_gain] + list(cemgil) + list(continuity)
 		return scores_list
 
 
