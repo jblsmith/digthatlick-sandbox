@@ -18,13 +18,13 @@ beat = tracker.Beat()
 for ind in beat.data.index:
 	try:
 		# Load audio
-		beat.set_index(i)
+		beat.set_index(ind)
 		# Run estimators
 		beat.run_estimates()
 		# Write outputs to files
 		beat.write_all_rhythms()
 	except:
-		print "Failed for " + str(i)
+		print "Failed for " + str(ind)
 
 # Code to load outputs into memory, evaluate them, and save all evaluation scores
 reload(tracker)
@@ -38,15 +38,18 @@ for ind in beat.data.index:
 	b_scores, db_scores = beat.evaluate_estimates(ind)
 	score_list += [(b_scores, db_scores)]
 
+
+# Collect beat and downbeat scores into separate structures and print headline results (mean, median, max)
 beat_results = np.array(zip(*score_list)[0])
 dbeat_results = np.array(zip(*score_list)[1])
 print np.mean(beat_results,axis=0)
 print np.mean(dbeat_results,axis=0)
 print np.median(beat_results,axis=0)
 print np.median(dbeat_results,axis=0)
-np.max(beat_results,axis=0)
-np.max(dbeat_results,axis=0)
+print np.max(beat_results,axis=0)
+print np.max(dbeat_results,axis=0)
 
+# Reshape results into dataframes
 all_results = np.concatenate((beat_results, dbeat_results),axis=1)
 beat.data['Decade'] = ((beat.data.Year-1900)/10).astype(int)
 algo_names = ['QM_beat', 'MM_beat', 'ES_beat', 'QM_downbeat', 'MM_downbeat']
@@ -56,27 +59,95 @@ A = algo_names*len(metric_names)
 B = [[n]*len(algo_names) for n in metric_names]
 B = [item for sublist in B for item in sublist]
 
-
-
-
 data = beat.data.copy()
-data = data.iloc[:-1,:]
+# data = data.iloc[:-1,:]
 all_results_table = np.concatenate([all_results[:,:,i] for i in range(all_results.shape[2])],axis=1)
 all_results_cols = [algo_names[j] + "_" + metric_names[i] for i in range(all_results.shape[2]) for j in range(all_results.shape[1])]
+
+#  THIS STUFF DOESN'T WORK ANYMORE... NOT SURE WHY
 for i,colname in enumerate(all_results_cols):
 	data[colname] = all_results_table[:,i]
 
 for j,tmp_range in enumerate([[range(4)], [range(4,6)], [range(6,10)]]):
-	plt.clf()
+	plt.figure(j)
+	# plt.clf()
 	tmp_rows = [data.mean()[5+i*len(algo_names):10+i*len(algo_names)] for i in tmp_range[0]]
 	new_df = pd.DataFrame(np.array(tmp_rows), columns=algo_names, index=[metric_names[i] for i in tmp_range[0]])
 	new_df.transpose().plot()
 	plt.title('Average metric for all algos and both metric levels (set ' + str(j) + ')')
 	axes = plt.gca()
 	axes.set_ylim([0,1])
-	plt.savefig('Metric_set_' + str(j) + '.jpg')
+	# plt.savefig('Metric_set_' + str(j) + '.jpg')
 
 
+
+plt.boxplot(all_data_b)
+
+
+# Make figures for presentation
+plt.clf()
+tmp_data = data[data.columns[10:15]].copy()
+tmp_data.columns = ['QM (beat)', 'MM (beat)', 'ES (beat)', 'QM (downbeat)', 'MM (downbeat)']
+tmp_data.boxplot(fontsize=10,grid=False)
+plt.title('F-MEASURE for all algos, beats and downbeats')
+plt.savefig('PREZ_Overall_fmeas-verbose.jpg')
+
+plt.clf()
+tmp_data = data[data.columns[10:15]].copy()
+tmp_data.columns = ['QM-B', 'MM-B', 'ES-B', 'QM-DB', 'MM-DB']
+tmp_data.boxplot(fontsize=10,grid=False)
+plt.title('F-MEASURE for all algos, beats and downbeats')
+plt.savefig('PREZ_Overall_fmeas.jpg')
+
+plt.clf()
+tmp_data = data[data.columns[20:25]].copy()
+tmp_data.columns = ['QM-B', 'MM-B', 'ES-B', 'QM-DB', 'MM-DB']
+tmp_data.boxplot(fontsize=10,grid=False)
+plt.title('P-SCORE for all algos, beats and downbeats')
+plt.savefig('PREZ_Overall_pscore.jpg')
+
+plt.clf()
+tmp_data = data[data.columns[[41,46,51,56]]].copy()
+tmp_data.columns = ['CML-c','CML-t','AML-c','AML-t']
+tmp_data.boxplot(fontsize=10,grid=False)
+plt.title('CONTINUITY SCORES for madmom beat tracking')
+plt.savefig('PREZ_Overall_mm_beat.jpg')
+
+plt.clf()
+tmp_data = data[data.columns[[44,49,54,59]]].copy()
+tmp_data.columns = ['CML-c','CML-t','AML-c','AML-t']
+tmp_data.boxplot(fontsize=10,grid=False)
+plt.title('CONTINUITY SCORES for madmom downbeat tracking')
+plt.savefig('PREZ_Overall_mm_dbeat.jpg')
+
+
+# plt.clf()
+# tmp_data = data[data.columns[[30,35,31,36,32,37,33,38,34,39]]].copy()
+# tmp_data.columns = ['QM-B', '(max)', 'MM-B', '(max)', 'ES-B', '(max)', 'QM-DB', '(max)', 'MM-DB', '(max)']
+# tmp_data.boxplot(fontsize=10,grid=False)
+# plt.title('CEMGIL SCORE (and MAX) for all algos, beats and downbeats')
+# plt.savefig('PREZ_Overall_cemgil.jpg')
+#
+# plt.clf()
+# tmp_data = data[data.columns[10:15]].copy()
+# tmp_data.columns = ['QM-B', 'MM-B', 'ES-B', 'QM-DB', 'MM-DB']
+# tmp_data.boxplot(fontsize=10,grid=False)
+# plt.title(' F-MEASURE for all algos, beats and downbeats')
+# plt.savefig('PREZ_Overall_fmeas.jpg')
+#
+# plt.gcf()
+# plt.clf()
+# tmp_range = [0, 2, 4, 5] # F-measure, p-score, CEMG and CEMGmax
+# tmp_rows = [data.mean()[5+i*len(algo_names):10+i*len(algo_names)] for i in tmp_range]
+# new_df = pd.DataFrame(np.array(tmp_rows), columns=algo_names, index=[metric_names[i] for i in tmp_range])
+# new_df.transpose().plot()
+# plt.title('Average metric for all algos and both metric levels (set ' + str(j) + ')')
+# axes = plt.gca()
+# axes.set_ylim([0,1])
+# # plt.savefig('Metric_set_' + str(j) + '.jpg')
+#
+# plt.boxplot(data[data.columns[10:15]].transpose()), columns=algo_names)
+# data[data.columns[10:15]].boxplot()
 
 
 df = pd.DataFrame(data=all_results_table, columns=pd.MultiIndex.from_tuples(zip(A,B)))
@@ -90,30 +161,199 @@ plt.ion()
 # f = plt.figure(1)
 for var in ['Decade', 'Style', 'Inst.']:
 	plt.clf()
-	all_data_b.groupby(var).mean()[all_data.columns[10:14]].plot(xticks=range(len(np.unique(all_data[var]))-1))
+	all_data_b.groupby(var).mean()[all_data_b.columns[10:14]].plot(xticks=range(len(np.unique(all_data_b[var]))-1))
 	plt.title('Average beat tracking success according to ' + var, color='black')
 	axes = plt.gca()
 	axes.set_ylim([0,1])
 	plt.savefig('Avg_by_' + var + '_BT-1.jpg')
 	plt.clf()
-	all_data_b.groupby(var).mean()[all_data.columns[14:]].plot(xticks=range(len(np.unique(all_data[var]))-1))
+	all_data_b.groupby(var).mean()[all_data_b.columns[14:]].plot(xticks=range(len(np.unique(all_data_b[var]))-1))
 	plt.title('Average beat tracking success according to ' + var, color='black')
 	axes = plt.gca()
 	axes.set_ylim([0,1])
 	plt.savefig('Avg_by_' + var + '_BT-2.jpg')
 	plt.clf()
-	all_data_db.groupby(var).mean()[all_data.columns[10:14]].plot(xticks=range(len(np.unique(all_data[var]))-1))
+	all_data_db.groupby(var).mean()[all_data_db.columns[10:14]].plot(xticks=range(len(np.unique(all_data_db[var]))-1))
 	plt.title('Average downbeat tracking success according to ' + var, color='black')
 	axes = plt.gca()
 	axes.set_ylim([0,1])
 	plt.savefig('Avg_by_' + var + '_DBT-1.jpg')
 	plt.clf()
-	all_data_db.groupby(var).mean()[all_data.columns[14:]].plot(xticks=range(len(np.unique(all_data[var]))-1))
+	all_data_db.groupby(var).mean()[all_data_db.columns[14:]].plot(xticks=range(len(np.unique(all_data_db[var]))-1))
 	plt.title('Average downbeat tracking success according to ' + var, color='black')
 	axes = plt.gca()
 	axes.set_ylim([0,1])
 	plt.savefig('Avg_by_' + var + '_DBT-2.jpg')
 
+
+plt.figure(1)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,1,0])
+plt.xlabel("Tempo")
+plt.ylabel("F-measure")
+plt.title("F-measure vs. Tempo for Madmom beat tracking")
+axes = plt.gca()
+axes.set_ylim([0,1])
+plt.savefig("PREZ-tempo_trend_fmeas_mm_b")
+
+plt.figure(1)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,4,0])
+plt.xlabel("Tempo")
+plt.ylabel("F-measure")
+plt.title("F-measure vs. Tempo for Madmom downbeat tracking")
+axes = plt.gca()
+axes.set_ylim([0,1])
+plt.savefig("PREZ-tempo_trend_fmeas_mm_db")
+
+plt.figure(1)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,0,0])
+plt.xlabel("Tempo")
+plt.ylabel("F-measure")
+plt.title("F-measure vs. Tempo for QM beat tracking")
+axes = plt.gca()
+axes.set_ylim([0,1])
+plt.savefig("PREZ-tempo_trend_fmeas_qm_b")
+
+plt.figure(1)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,3,0])
+plt.xlabel("Tempo")
+plt.ylabel("F-measure")
+plt.title("F-measure vs. Tempo for QM downbeat tracking")
+axes = plt.gca()
+axes.set_ylim([0,1])
+plt.savefig("PREZ-tempo_trend_fmeas_qm_db")
+
+
+
+plt.figure(1)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,1,6])
+plt.xlabel("Tempo")
+plt.ylabel("CMLc")
+plt.title("CMLc vs. Tempo for MM beat tracking")
+axes = plt.gca()
+axes.set_ylim([0,1])
+plt.savefig("PREZ-tempo_trend_cmlc_mm_b")
+
+plt.figure(1)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,1,8])
+plt.xlabel("Tempo")
+plt.ylabel("AMLc")
+plt.title("AMLc vs. Tempo for MM beat tracking")
+axes = plt.gca()
+axes.set_ylim([0,1])
+plt.savefig("PREZ-tempo_trend_amlc_mm_")
+
+
+
+plt.figure(1)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,1,2])
+plt.xlabel("Tempo")
+plt.ylabel("P-score")
+plt.title("P-score vs. Tempo for Madmom beat tracking")
+axes = plt.gca()
+axes.set_ylim([0,1])
+plt.savefig("PREZ-tempo_trend_p_mm_b")
+
+
+plt.figure(1)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,4,2])
+plt.xlabel("Tempo")
+plt.ylabel("P-score")
+plt.title("P-score vs. Tempo for Madmom downbeat tracking")
+axes = plt.gca()
+axes.set_ylim([0,1])
+plt.savefig("PREZ-tempo_trend_p_mm_db")
+
+
+
+
+plt.figure(2)
+plt.clf()
+plt.scatter(beat.data.Tempo, all_results[:,4,2])
+
+for i in range(len(metric_names)):
+	plt.figure(3)
+	plt.clf()
+	plt.scatter(beat.data.Tempo, all_results[:,2,i])
+	plt.title(metric_names[i] + ' as a function of Tempo', color='black')
+	axes = plt.gca()
+	axes.set_ylim([0,1])
+	plt.savefig('Tempo_for_' + metric_names[i] + '_essentia_B.jpg')
+
+
+
+TODO
+check if the annotated tempo is actually true given the beat/db annotations
+read up on Jazzomat metadata source: how do they know what style is which?
+you can use wget to download annotations with rich name instead of number
+
+
+Prepare update slide deck for May 3-4 meeting
+
+
+data.boxplot("Tempo","Style")
+plt.savefig('Metadata_correlations_tempo_style.jpg')
+data.boxplot("Tempo","Decade")
+plt.savefig('Metadata_correlations_tempo_decade.jpg')
+data.boxplot("Decade","Style")
+plt.savefig('Metadata_correlations_decade_style.jpg')
+
+
+plt.clf()
+data.boxplot("MM_beat_fmeas","Style")
+topic_list = np.unique(data.Style)
+data_weights = [np.sum(data.Style==gen_x) for gen_x in topic_list]
+ax = plt.gca()
+new_labs = [topic_list[i] + "\n(" + str(data_weights[i]) + ")" for i in range(len(data_weights))]
+ax.set_xticklabels(new_labs)
+plt.title("F-MEASURE for Madmom beat tracking for different styles")
+plt.savefig('PREZ_factors_style_mm-b.jpg')
+
+plt.clf()
+data.boxplot("MM_downbeat_fmeas","Style")
+topic_list = np.unique(data.Style)
+data_weights = [np.sum(data.Style==gen_x) for gen_x in topic_list]
+ax = plt.gca()
+new_labs = [topic_list[i] + "\n(" + str(data_weights[i]) + ")" for i in range(len(data_weights))]
+ax.set_xticklabels(new_labs)
+plt.title("F-MEASURE for Madmom downbeat tracking for different styles")
+plt.savefig('PREZ_factors_style_mm-db.jpg')
+
+plt.clf()
+data.boxplot("MM_beat_fmeas","Inst.")
+topic_list = np.unique(data['Inst.'])
+data_weights = [np.sum(data['Inst.']==gen_x) for gen_x in topic_list]
+ax = plt.gca()
+new_labs = [topic_list[i] + "\n(" + str(data_weights[i]) + ")" for i in range(len(data_weights))]
+ax.set_xticklabels(new_labs)
+plt.title("F-MEASURE for Madmom beat tracking for different solo instruments")
+plt.savefig('PREZ_factors_inst_mm-b.jpg')
+
+plt.clf()
+data.boxplot("MM_beat_fmeas","Decade")
+topic_list = np.unique(data['Decade'])
+data_weights = [np.sum(data['Decade']==gen_x) for gen_x in topic_list]
+ax = plt.gca()
+new_labs = [str(topic_list[i]) + "0s\n(" + str(data_weights[i]) + ")" for i in range(len(data_weights))]
+ax.set_xticklabels(new_labs)
+plt.title("F-MEASURE for Madmom beat tracking for different decades")
+plt.savefig('PREZ_factors_decade_mm-b.jpg')
+
+
+
+
+
+plt.boxplot(all_results[:,1,0], data.Style)
+
+
+plt.scatter(beat.data.Tempo, all_results[:,1,0]-all_results[:,4,0])
 
 
 # Plot according to algirthm

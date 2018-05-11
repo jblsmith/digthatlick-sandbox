@@ -24,11 +24,6 @@ import vamp
 import xml.etree.ElementTree
 import xml.etree.ElementTree as ET
 
-# import librosa, librosa.display
-# spshow = librosa.display.specshow
-# import matplotlib.pyplot as plt
-# plt.ion()
-
 class Beat(object):
 
 	# Initial management:
@@ -75,10 +70,7 @@ class Beat(object):
 	
 	def make_pickle_path(self, extractor_type = "madmom"):
 		return self.est_dir + extractor_type + "/" + str(self.ind) + ".p"
-		# self.qm_path = self.est_dir + "qm/" + str(ind) + ".p"
-		# self.es_path = self.est_dir + "essentia/" + str(ind) + ".p"
-		# self.mm_path = self.est_dir + "madmom/" + str(ind) + ".p"
-			
+
 	def manage_metadata(self):
 		metadata_table_path = self.data_dir + "/annotations/weimar_contents.tsv"
 		metadata_table = open(metadata_table_path,'r').readlines()
@@ -106,19 +98,6 @@ class Beat(object):
 		beat_file_path = self.beats_dir + str(ind) + ".csv"
 		rhythm_data = self.read_csv_format(beat_file_path)
 		self.rhythm_data['true'] = rhythm_data
-		# beat_table = open(beat_file_path,'r').readlines()
-		# header = beat_table[0].strip().split(",")
-		# datarows = [line.strip().split(",") for line in beat_table[1:]]
-		# downbeat,beat,onset = zip(*datarows)
-		# downbeat = [int(x) for x in downbeat]
-		# beat = [int(x) for x in beat]
-		# onset = [float(x) for x in onset]
-		# self.true_beats = [downbeat, beat, onset]
-		# self.true_dt = onset
-		# self.true_t = []
-		# for i in range(len(onset)-1):
-		# 	self.true_t += list(np.linspace(self.true_dt[i],self.true_dt[i+1],5)[:-1])
-		# self.true_beats = {'db':downbeat, 'b':beat, 'ons':onset}
 	
 	def load_true_beats_and_downbeats(self, ind):
 		print "Loading beats and downbeats."
@@ -232,9 +211,6 @@ class Beat(object):
 			filehandle.write("\n".join(list(self.rhythm_data[extractor]['onset'][self.rhythm_data[extractor]['beat']==1].astype(str))))
 			
 	def run_estimates(self):
-		# self.estimate_beats_qm()
-		# self.estimate_beats_essentia()
-		# self.estimate_beats_madmom()
 		self.estimate_beats(extractor_type='qm')
 		self.estimate_beats(extractor_type='essentia')
 		self.estimate_beats(extractor_type='madmom')
@@ -254,25 +230,7 @@ class Beat(object):
 			csv_path = self.make_csv_path(extractor_type)
 			tmp_rhythm_data = self.read_csv_format(csv_path)
 			self.rhythm_data[extractor_type] = tmp_rhythm_data
-	#
-	# def load_estimates(self, ind):
-	# 	if os.path.exists(self.qm_path):
-	# 		with open(self.qm_path,'r') as filehandle:
-	# 			qm_pickle = pickle.load(filehandle)
-	# 			self.qm_t = qm_pickle['beat']
-	# 			self.qm_dt = qm_pickle['downbeat']
-	# 			self.qm_b = qm_pickle['labels']
-	# 	if os.path.exists(self.es_path):
-	# 		with open(self.es_path,'r') as filehandle:
-	# 			es_pickle = pickle.load(filehandle)
-	# 			self.es_t = es_pickle['beat']
-	# 	if os.path.exists(self.mm_path):
-	# 		with open(self.mm_path,'r') as filehandle:
-	# 			mm_pickle = pickle.load(filehandle)
-	# 			self.mm_t = mm_pickle['beat']
-	# 			self.mm_dt = mm_pickle['downbeat']
-	# 			self.mm_b = mm_pickle['labels']
-	
+
 	def evaluate_estimates(self, ind):
 		# beat_scores = []
 		# dbeat_scores = []
@@ -287,25 +245,13 @@ class Beat(object):
 		db_scores = []
 		for ext in ['qm','madmom']:
 			est_dbeats = np.array(self.rhythm_data[ext]['onset'][self.rhythm_data[ext]['beat']==1])
-			db_scores += [self.get_scores(ref_dbeats, est_dbeats)]
-		#
-		# est_beat_opts = [self.qm_t, self.es_t, self.mm_t, self.qm_dt, self.mm_dt]
-		# ref_beat_opts = [self.true_t, self.true_t, self.true_t, self.true_dt, self.true_dt]
-		# scores = [self.get_scores(np.array(ref_beat_opts[i]), np.array(est_beat_opts[i])) for i in range(len(est_beat_opts))]
-		# for i in range(len(est_beat_opts)):
-		# 	est_beats = est_beat_opts[i]
-		# 	ref_beats = ref_beat_opts[i]
-		# 	score_i = get_scores(ref_beats, est_beats)		
+			db_scores += [self.get_scores(ref_dbeats, est_dbeats)]	
 		return b_scores, db_scores
 	
 	def eval_downbeats(self, ind):
 		est_beat_opts = [self.qm_dt, self.mm_dt]
 		ref_beats = self.true_dt
-		scores = [self.get_scores(np.array(ref_beats), np.array(est_beat_opts[i])) for i in range(len(est_beat_opts))]
-		# for i in range(len(est_beat_opts)):
-		# 	est_beats = est_beat_opts[i]
-		# 	ref_beats = ref_beat_opts[i]
-		# 	score_i = get_scores(ref_beats, est_beats)		
+		scores = [self.get_scores(np.array(ref_beats), np.array(est_beat_opts[i])) for i in range(len(est_beat_opts))]	
 		return scores	
 	
 	def get_scores(self, ref_beats, est_beats):
@@ -317,52 +263,14 @@ class Beat(object):
 		information_gain = mir_eval.beat.information_gain(ref_beats, est_beats)
 		scores_list = [f_measure, goto, p_score, information_gain] + list(cemgil) + list(continuity)
 		return scores_list
+	
+	@staticmethod
+	def rhythm_beat_times(rhythm_data):
+		return np.array(rhythm_data['onset'])
 
-
-
-
-
-	# In all the "estimate_beats" functions:
-	#	self.___t = beat times (onsets)
-	#	self.___b = beat labels
-	#	self.___dt = downbeat times
-
-	# def estimate_beats_qm(self):
-	# 	print "Extracting beats using QM Vamp plugin..."
-	# 	self.qm_output = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')    # Beat and downbeat
-	# 	# bt1 = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')    # Beat and downbeat
-	# 	# bt2 = vamp.collect(signal_mono, sr_lib, 'beatroot-vamp:beatroot')               # Beat
-	# 	# bt3 = vamp.collect(signal_mono, sr_lib, 'qm-vamp-plugins:qm-tempotracker')      # Beat and tempo
-	# 	t1,b1 = zip(*[(float(item['timestamp']), int(item['label'])) for item in bt1['list']])
-	# 	self.qm_t = [float(x) for x in t1]
-	# 	self.qm_b = [int(x) for x in b1]
-	# 	self.qm_dt = [self.qm_t[i] for i in range(len(self.qm_t)) if self.qm_b[i]==1]
-	# 	print "Done."
-	# 	pickle_obj = {'beat':self.qm_t, 'downbeat':self.qm_dt, 'labels':self.qm_b}
-	# 	with open(self.make_pickle_path(extractor_type='qm'), 'w') as filehandle:
-	# 		pickle.dump(pickle_obj, filehandle)
-	#
-	# def estimate_beats_essentia(self):
-	# 	print "Extracting beats using Essentia..."
-	# 	beat_tracker = essentia.standard.BeatTrackerMultiFeature()
-	# 	# ticks, confidence = beat_tracker(audio_ess)
-	# 	ticks, confidence = beat_tracker(self.signal_mono)
-	# 	self.es_output = ticks
-	# 	self.es_t = list(ticks)
-	# 	print "Done."
-	# 	pickle_obj = {'beat':self.es_t}
-	# 	with open(self.es_path, 'w') as filehandle:
-	# 		pickle.dump(pickle_obj, filehandle)
-	#
-	# def estimate_beats_madmom(self):
-	# 	print "Extracting beats using Madmom..."
-	# 	mm_db_detect_func = madmom.features.beats.RNNDownBeatProcessor()(self.signal_mono)
-	# 	downbeat_output = madmom.features.beats.DBNDownBeatTrackingProcessor(beats_per_bar=[3,4], fps=100)(mm_db_detect_func)
-	# 	self.mm_t = list(downbeat_output[:,0])
-	# 	self.mm_b = list(downbeat_output[:,1].astype(int))
-	# 	self.mm_dt = [self.mm_t[i] for i in range(len(self.mm_t)) if self.mm_b[i]==1]
-	# 	self.mm_raw = downbeat_output
-	# 	print "Done."
-	# 	pickle_obj = {'beat':self.mm_t, 'downbeat':self.mm_dt, 'labels':self.mm_b}
-	# 	with open(self.mm_path, 'w') as filehandle:
-	# 		pickle.dump(pickle_obj, filehandle)
+	@staticmethod
+	def rhythm_downbeat_times(rhythm_data, phase=1):
+		return np.array(rhythm_data['onset'][rhythm_data['beat']==phase])
+	
+	# def match_octave_phase(self, rhythm_data, rhythm_true):
+		
