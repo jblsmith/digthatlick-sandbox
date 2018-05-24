@@ -4,6 +4,7 @@
 # 
 # 	Imports
 
+import dataset
 import essentia
 import essentia.standard
 import essentia.streaming
@@ -33,6 +34,7 @@ class Beat(object):
 
 	def __init__(self):
 		self.data_dir = "/Users/jordan/Documents/data/WeimarJazzDatabase"
+		self.database_path = self.data_dir + "/wjazzd.db"
 		self.sv_dir = self.data_dir + "/annotations/SV/"
 		self.annotation_dir = self.data_dir + "/annotations/"
 		self.audio_orig_dir = self.data_dir + "/audio/wav_orig/"
@@ -41,6 +43,7 @@ class Beat(object):
 		self.solo_dir = self.data_dir + "/annotations/solo/"
 		self.est_dir = self.data_dir + "/estimates/"
 		self.manage_metadata()
+		self.load_db()
 		# Open metadata and extract contents
 		self.sv_paths = glob.glob(self.sv_dir + "*.sv")
 		song_basenames = [re.sub("_FINAL.sv","",re.sub(self.sv_dir,"",path)) for path in self.sv_paths]
@@ -92,6 +95,9 @@ class Beat(object):
 		data['orig_path'] = [audio_filenames[i] for i in best_inds]
 		data.index = [int(i) for i in data['Ind']]
 		self.data = data
+
+	def load_db(self):
+		self.db = dataset.connect('sqlite:///' + self.database_path)
 	
 	def load_beats(self, ind):
 		print "Loading beats."
@@ -99,26 +105,33 @@ class Beat(object):
 		rhythm_data = self.read_csv_format(beat_file_path)
 		self.rhythm_data['true'] = rhythm_data
 	
+	# def load_true_beats_and_downbeats(self, ind):
+	# 	print "Loading beats and downbeats."
+	# 	beat_file_path = self.annotation_dir + "magdalena/beat/" + str(ind) + ".txt"
+	# 	downbeat_file_path = self.annotation_dir + "magdalena/downbeat/" + str(ind) + ".txt"
+	# 	beat_list = list(pd.read_csv(beat_file_path,header=-1)[0])
+	# 	downbeat_list = list(pd.read_csv(downbeat_file_path,header=-1)[0])
+	# 	downbeat_inds = [i for i in range(len(beat_list)) if np.min(np.abs(beat_list[i]-np.array(downbeat_list)))<0.001]
+	# 	beat_labels = np.zeros(len(beat_list)).astype(int)
+	# 	beat_labels[downbeat_inds]=1
+	# 	for i in range(1,len(beat_labels)-1):
+	# 		if beat_labels[i]==0:
+	# 			beat_labels[i]=beat_labels[i-1]+1
+	#
+	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
+	# 	new_rhythm_data.onset = beat_list
+	# 	new_rhythm_data.beat = beat_labels
+	# 	bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
+	# 	new_rhythm_data.bar[0] = 0
+	# 	new_rhythm_data.bar[1:] = bars
+	# 	self.rhythm_data['true'] = new_rhythm_data
+	
 	def load_true_beats_and_downbeats(self, ind):
-		print "Loading beats and downbeats."
-		beat_file_path = self.annotation_dir + "magdalena/beat/" + str(ind) + ".txt"
-		downbeat_file_path = self.annotation_dir + "magdalena/downbeat/" + str(ind) + ".txt"
-		beat_list = list(pd.read_csv(beat_file_path,header=-1)[0])
-		downbeat_list = list(pd.read_csv(downbeat_file_path,header=-1)[0])
-		downbeat_inds = [i for i in range(len(beat_list)) if np.min(np.abs(beat_list[i]-np.array(downbeat_list)))<0.001]
-		beat_labels = np.zeros(len(beat_list)).astype(int)
-		beat_labels[downbeat_inds]=1
-		for i in range(1,len(beat_labels)-1):
-			if beat_labels[i]==0:
-				beat_labels[i]=beat_labels[i-1]+1
-
-		new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
-		new_rhythm_data.onset = beat_list
-		new_rhythm_data.beat = beat_labels
-		bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
-		new_rhythm_data.bar[0] = 0
-		new_rhythm_data.bar[1:] = bars
-		self.rhythm_data['true'] = new_rhythm_data		
+		relevant_beats = self.db['beats'].find(melid=ind)
+		colnames = relevant_beats.keys
+		data_list_of_lists = [row for row in relevant_beats]
+		table_as_df = pd.DataFrame(data=data_list_of_lists, columns=colnames)
+		self.rhythm_data['true'] = table_as_df[['bar','beat','onset']]
 
 	def load_audio(self, ind=None, abspath=None):
 		print "Loading audio..."
