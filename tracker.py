@@ -18,12 +18,42 @@ import numpy as np
 import os.path
 import pandas as pd
 import pickle
-import py_sonicvisualiser
+# import py_sonicvisualiser
 import re
 import scipy as sp
 import vamp
-import xml.etree.ElementTree
-import xml.etree.ElementTree as ET
+
+
+class RhythmData(object):
+	def __init__(self, beat_onset, bar=[], beat=[], infer=True):
+		assert (len(beat_onset)>0), "You must provide onsets to instantiate a RhythmData object"
+		self.beat_onset = np.array(beat_onset).astype(float)
+		self.bar = np.array(bar).astype(int)
+		self.beat = np.array(beat).astype(int)
+		# self.tempo = tempo.astype(float)
+		# self.time_signature = time_signature
+		if infer:
+			self.infer_missing_data()
+		
+	def infer_missing_data(self):
+		# If we have nothing at all to go on, just assume it's 4/4, with the first beat = 1.
+		if not len(self.bar) and not len(self.beat):
+			time_sig = 4
+			self.beat = [range(time_sig)[np.mod(i,time_sig)]+1 for i in range(len(self.beat_onset))]
+		
+		# If we have beat indices and beat_onset, we can infer the downbeat onsets and bar numbers.
+		if len(self.beat) and not len(self.bar):
+			# bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
+			bars = np.cumsum(np.array(self.beat[1:])<np.array(self.beat[:-1]))
+			bars = np.concatenate(([0], bars))
+			self.bar = bars
+		
+		# If we have the bar number of each beat, we can infer the beat indices.
+		if len(self.bar) and not len(self.beat):
+			beats = np.arange(1,len(self.bar)+1)
+			for val in np.unique(self.bar):
+				beats[self.bar==val] -= np.min(beats[self.bar==val])-1
+			self.beat = beats
 
 class Beat(object):
 
@@ -167,40 +197,54 @@ class Beat(object):
 			mm_db_detect_func = madmom.features.beats.RNNDownBeatProcessor()(self.signal_mono)
 			self.mm_output = madmom.features.beats.DBNDownBeatTrackingProcessor(beats_per_bar=[3,4], fps=100)(mm_db_detect_func)
 			self.set_rhythm_from_madmom()
+		else:
+			print "Unrecognized beat tracker type. Didn't do anything."
+
+	# def set_rhythm_from_madmom(self):
+	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
+	# 	new_rhythm_data.beat = self.mm_output[:,1].astype(int)
+	# 	new_rhythm_data.onset = self.mm_output[:,0]
+	# 	bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
+	# 	new_rhythm_data.bar[0] = 0
+	# 	new_rhythm_data.bar[1:] = bars
+	# 	self.rhythm_data['madmom'] = new_rhythm_data
+	#
+	# def set_rhythm_from_qm(self):
+	# 	# qm_output = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')    # Beat and downbeat
+	# 	# bt2 = vamp.collect(signal_mono, sr_lib, 'beatroot-vamp:beatroot')               # Beat
+	# 	# bt3 = vamp.collect(signal_mono, sr_lib, 'qm-vamp-plugins:qm-tempotracker')      # Beat and tempo
+	# 	times,labels = zip(*[(float(item['timestamp']), int(item['label'])) for item in self.qm_output['list']])
+	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
+	# 	new_rhythm_data.beat = labels
+	# 	new_rhythm_data.onset = times
+	# 	bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
+	# 	new_rhythm_data.bar[0] = 0
+	# 	new_rhythm_data.bar[1:] = bars
+	# 	self.rhythm_data['qm'] = new_rhythm_data
+	#
+	# def set_rhythm_from_essentia(self):
+	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
+	# 	new_rhythm_data.onset = self.es_output
+	# 	# Infer downbeat labels naively
+	# 	beat = [[1,2,3,4][np.mod(i,4)] for i in range(len(new_rhythm_data.onset))]
+	# 	new_rhythm_data.beat = beat
+	# 	bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
+	# 	new_rhythm_data.bar[0] = 0
+	# 	new_rhythm_data.bar[1:] = bars
+	# 	self.rhythm_data['essentia'] = new_rhythm_data
+	
 
 	def set_rhythm_from_madmom(self):
-		new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
-		new_rhythm_data.beat = self.mm_output[:,1].astype(int)
-		new_rhythm_data.onset = self.mm_output[:,0]
-		bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
-		new_rhythm_data.bar[0] = 0
-		new_rhythm_data.bar[1:] = bars
-		self.rhythm_data['madmom'] = new_rhythm_data
-
+		self.rhythm_data['madmom'] = RhythmData(beat=self.mm_output[:,1], beat_onset=self.mm_output[:,0], infer=True)
+		# This will infer the bar numbers [0, 1, 2, ..., nbars] automatically from the beat indices [1,2,3,4,1,2,3,4,1,2,...].
+	
 	def set_rhythm_from_qm(self):
-		# qm_output = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')    # Beat and downbeat
-		# bt2 = vamp.collect(signal_mono, sr_lib, 'beatroot-vamp:beatroot')               # Beat
-		# bt3 = vamp.collect(signal_mono, sr_lib, 'qm-vamp-plugins:qm-tempotracker')      # Beat and tempo
 		times,labels = zip(*[(float(item['timestamp']), int(item['label'])) for item in self.qm_output['list']])
-		new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
-		new_rhythm_data.beat = labels
-		new_rhythm_data.onset = times
-		bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
-		new_rhythm_data.bar[0] = 0
-		new_rhythm_data.bar[1:] = bars
-		self.rhythm_data['qm'] = new_rhythm_data
-
+		self.rhythm_data['qm'] = RhythmData(beat = labels, beat_onset = times, infer=True)
+	
 	def set_rhythm_from_essentia(self):
-		new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
-		new_rhythm_data.onset = self.es_output
-		# Infer downbeat labels naively
-		beat = [[1,2,3,4][np.mod(i,4)] for i in range(len(new_rhythm_data.onset))]
-		new_rhythm_data.beat = beat
-		bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
-		new_rhythm_data.bar[0] = 0
-		new_rhythm_data.bar[1:] = bars
-		self.rhythm_data['essentia'] = new_rhythm_data
-
+		self.rhythm_data['essentia'] = RhythmData(beat_onset = self.es_output, infer=True)
+	
 	def read_csv_format(self, beat_file_path):
 		csv_data = pd.read_csv(beat_file_path,header=0)
 		csv_data[['bar','beat']] = csv_data[['bar','beat']].astype(int)
@@ -211,17 +255,18 @@ class Beat(object):
 		write_path = self.make_csv_path(extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
 			self.rhythm_data[extractor].to_csv(filehandle, index=False)
+			# FIXME: this will not work anymore, now that rhythm data is a custom object instead of a dataframe. Why did I make it a custom object again?? Why isn't it just a custom object that is a wrapper around a dataframe?
 	
 	def write_beats(self, extractor):
 		write_path = self.make_beat_path(beat_type = 0, extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
-			filehandle.write("\n".join(list(self.rhythm_data[extractor]['onset'].astype(str))))
+			filehandle.write("\n".join(list(self.rhythm_data[extractor].beat_onset.astype(str))))
 	
 	def write_downbeats(self, extractor):
 		write_path = self.make_beat_path(beat_type = 1, extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
 			# self.rhythm_data[extractor].to_csv(filehandle)
-			filehandle.write("\n".join(list(self.rhythm_data[extractor]['onset'][self.rhythm_data[extractor]['beat']==1].astype(str))))
+			filehandle.write("\n".join(list(self.rhythm_data[extractor].beat_onset[self.rhythm_data[extractor].beat==1].astype(str))))
 			
 	def run_estimates(self):
 		self.estimate_beats(extractor_type='qm')
