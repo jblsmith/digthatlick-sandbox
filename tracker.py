@@ -17,7 +17,7 @@ import mir_eval
 import numpy as np
 import os.path
 import pandas as pd
-import pickle
+# import pickle
 # import py_sonicvisualiser
 import re
 import scipy as sp
@@ -54,6 +54,9 @@ class RhythmData(object):
 			for val in np.unique(self.bar):
 				beats[self.bar==val] -= np.min(beats[self.bar==val])-1
 			self.beat = beats
+	
+	def as_dataframe(self):
+		return pd.DataFrame({'bar':self.bar, 'beat':self.beat, 'onset':self.beat_onset})
 
 class Beat(object):
 
@@ -65,6 +68,7 @@ class Beat(object):
 	def __init__(self):
 		self.data_dir = "/Users/jordan/Documents/data/WeimarJazzDatabase"
 		self.database_path = self.data_dir + "/wjazzd.db"
+		self.output_database_path = self.data_dir + "/output_database.db"
 		self.sv_dir = self.data_dir + "/annotations/SV/"
 		self.annotation_dir = self.data_dir + "/annotations/"
 		self.audio_orig_dir = self.data_dir + "/audio/wav_orig/"
@@ -72,7 +76,7 @@ class Beat(object):
 		self.beats_dir = self.data_dir + "/annotations/beats/"
 		self.solo_dir = self.data_dir + "/annotations/solo/"
 		self.est_dir = self.data_dir + "/estimates/"
-		self.manage_metadata()
+		# self.manage_metadata()
 		self.load_db()
 		# Open metadata and extract contents
 		self.sv_paths = glob.glob(self.sv_dir + "*.sv")
@@ -84,7 +88,8 @@ class Beat(object):
 		self.fs = 44100
 		self.n_fft = 2048
 		self.hop_length = 512
-		self.rhythm_data = {}
+		self.raw_data = {}		# All raw algorithm outputs will be filed under here by name.
+		self.beats = {}			# All entries here will be RhythmData objects, probably converted from a corresponding raw data entry.
 	
 	def set_index(self, ind):
 		self.load_audio(ind)
@@ -101,39 +106,39 @@ class Beat(object):
 	def make_csv_path(self, extractor_type = 'madmom'):
 		return self.est_dir + extractor_type + "/" + str(self.ind) + ".csv"
 	
-	def make_pickle_path(self, extractor_type = "madmom"):
-		return self.est_dir + extractor_type + "/" + str(self.ind) + ".p"
+	# def make_pickle_path(self, extractor_type = "madmom"):
+	# 	return self.est_dir + extractor_type + "/" + str(self.ind) + ".p"
 
-	def manage_metadata(self):
-		metadata_table_path = self.data_dir + "/annotations/weimar_contents.tsv"
-		metadata_table = open(metadata_table_path,'r').readlines()
-		header = metadata_table[0].strip().split("\t")
-		datarows = [line.strip().split("\t") for line in metadata_table[1:]]
-		data = pd.DataFrame(datarows, columns=header)
-		data['Year'] = data['Year'].astype(int)
-		data['Tempo'] = data['Tempo'].astype(float)
-		data['Tones'] = data['Tones'].astype(int)
-		data['orig_path'] = None
-		audio_filepaths = glob.glob(self.audio_solo_dir + "*.wav")
-		audio_filenames = [os.path.basename(filename) for filename in audio_filepaths]
-		best_inds = np.zeros(len(data.index)).astype(int)
-		for i in data.index:
-			predicted_path = re.sub(" ","",data['Performer'][i]) + "_" + re.sub(" ","",data['Title'][i]) + "_Orig.wav"
-			edit_distances = [Levenshtein.distance(predicted_path,af) for af in audio_filenames]
-			# if np.min(edit_distances)<10:
-			best_inds[i] = int(np.argmin(edit_distances))
-		data['orig_path'] = [audio_filenames[i] for i in best_inds]
-		data.index = [int(i) for i in data['Ind']]
-		self.data = data
+	# def manage_metadata(self):
+	# 	metadata_table_path = self.data_dir + "/annotations/weimar_contents.tsv"
+	# 	metadata_table = open(metadata_table_path,'r').readlines()
+	# 	header = metadata_table[0].strip().split("\t")
+	# 	datarows = [line.strip().split("\t") for line in metadata_table[1:]]
+	# 	data = pd.DataFrame(datarows, columns=header)
+	# 	data['Year'] = data['Year'].astype(int)
+	# 	data['Tempo'] = data['Tempo'].astype(float)
+	# 	data['Tones'] = data['Tones'].astype(int)
+	# 	data['orig_path'] = None
+	# 	audio_filepaths = glob.glob(self.audio_solo_dir + "*.wav")
+	# 	audio_filenames = [os.path.basename(filename) for filename in audio_filepaths]
+	# 	best_inds = np.zeros(len(data.index)).astype(int)
+	# 	for i in data.index:
+	# 		predicted_path = re.sub(" ","",data['Performer'][i]) + "_" + re.sub(" ","",data['Title'][i]) + "_Orig.wav"
+	# 		edit_distances = [Levenshtein.distance(predicted_path,af) for af in audio_filenames]
+	# 		# if np.min(edit_distances)<10:
+	# 		best_inds[i] = int(np.argmin(edit_distances))
+	# 	data['orig_path'] = [audio_filenames[i] for i in best_inds]
+	# 	data.index = [int(i) for i in data['Ind']]
+	# 	self.data = data
 
 	def load_db(self):
 		self.db = dataset.connect('sqlite:///' + self.database_path)
 	
-	def load_beats(self, ind):
-		print "Loading beats."
-		beat_file_path = self.beats_dir + str(ind) + ".csv"
-		rhythm_data = self.read_csv_format(beat_file_path)
-		self.rhythm_data['true'] = rhythm_data
+	# def load_beats(self, ind):
+	# 	print "Loading beats."
+	# 	beat_file_path = self.beats_dir + str(ind) + ".csv"
+	# 	rhythm_data = self.read_csv_format(beat_file_path)
+	# 	self.raw_data['true'] = rhythm_data
 	
 	# def load_true_beats_and_downbeats(self, ind):
 	# 	print "Loading beats and downbeats."
@@ -161,7 +166,8 @@ class Beat(object):
 		colnames = relevant_beats.keys
 		data_list_of_lists = [row for row in relevant_beats]
 		table_as_df = pd.DataFrame(data=data_list_of_lists, columns=colnames)
-		self.rhythm_data['true'] = table_as_df[['bar','beat','onset']]
+		self.beats['true'] = RhythmData(beat_onset = table_as_df.onset, beat=table_as_df.beat, bar=table_as_df.bar)
+		# self.beats['true'] = table_as_df[['bar','beat','onset']]
 
 	def load_audio(self, ind=None, abspath=None):
 		print "Loading audio..."
@@ -169,8 +175,9 @@ class Beat(object):
 			self.signal, self.fs = librosa.core.load(abspath, sr=self.fs, mono=False)
 			print "Loaded audio."
 		elif ind is not None:
-			audiopath = self.audio_solo_dir + self.data['orig_path'][ind]
-			if audiopath is not None:
+			db_entry = self.db['transcription_info'].find_one(melid=ind)
+			if db_entry is not None:
+				audiopath = self.audio_solo_dir + db_entry['filename_solo'] + ".wav"
 				self.signal, self.fs = librosa.core.load(audiopath, sr=self.fs, mono=False)
 			else:
 				print "Sorry, we could not find matching audio for that file index."
@@ -181,24 +188,35 @@ class Beat(object):
 		print "Audio loaded and spectrum precomputed."
 		
 	def estimate_beats(self, extractor_type='qm'):
+		assert extractor_type in ['qm','madmom','essentia']
 		if extractor_type == 'qm':
 			print "Extracting beats using QM Vamp plugin..."
-			self.qm_output = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')    # Beat and downbeat
-			self.set_rhythm_from_qm()
+			self.raw_data[extractor_type] = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')    # Beat and downbeat
 		elif extractor_type == 'essentia':
 			print "Extracting beats using Essentia..."
 			beat_tracker = essentia.standard.BeatTrackerMultiFeature()
 			# ticks, confidence = beat_tracker(audio_ess)
 			ticks, confidence = beat_tracker(self.signal_mono)
-			self.es_output = ticks
-			self.set_rhythm_from_essentia()
+			self.raw_data[extractor_type] = ticks
 		elif extractor_type == 'madmom':
 			print "Extracting beats using Madmom..."
 			mm_db_detect_func = madmom.features.beats.RNNDownBeatProcessor()(self.signal_mono)
-			self.mm_output = madmom.features.beats.DBNDownBeatTrackingProcessor(beats_per_bar=[3,4], fps=100)(mm_db_detect_func)
-			self.set_rhythm_from_madmom()
+			self.raw_data[extractor_type] = madmom.features.beats.DBNDownBeatTrackingProcessor(beats_per_bar=[3,4], fps=100)(mm_db_detect_func)
 		else:
 			print "Unrecognized beat tracker type. Didn't do anything."
+			return
+		self.set_rhythm(extractor_type)
+
+	def set_rhythm(self, extractor_type='qm'):
+		assert extractor_type in ['qm','madmom','essentia']
+		self.beat_tracker = extractor_type
+		if extractor_type=='qm':
+			times,labels = zip(*[(float(item['timestamp']), int(item['label'])) for item in self.raw_data['qm']['list']])
+			self.beats[extractor_type] = RhythmData(beat = labels, beat_onset = times, infer=True)
+		elif extractor_type=='madmom':
+			self.beats[extractor_type] = RhythmData(beat=self.raw_data['madmom'][:,1], beat_onset=self.raw_data['madmom'][:,0], infer=True)
+		elif extractor_type=='essentia':
+			self.beats[extractor_type] = RhythmData(beat_onset = self.raw_data['essentia'], infer=True)
 
 	# def set_rhythm_from_madmom(self):
 	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
@@ -233,17 +251,16 @@ class Beat(object):
 	# 	new_rhythm_data.bar[1:] = bars
 	# 	self.rhythm_data['essentia'] = new_rhythm_data
 	
-
-	def set_rhythm_from_madmom(self):
-		self.rhythm_data['madmom'] = RhythmData(beat=self.mm_output[:,1], beat_onset=self.mm_output[:,0], infer=True)
-		# This will infer the bar numbers [0, 1, 2, ..., nbars] automatically from the beat indices [1,2,3,4,1,2,3,4,1,2,...].
-	
-	def set_rhythm_from_qm(self):
-		times,labels = zip(*[(float(item['timestamp']), int(item['label'])) for item in self.qm_output['list']])
-		self.rhythm_data['qm'] = RhythmData(beat = labels, beat_onset = times, infer=True)
-	
-	def set_rhythm_from_essentia(self):
-		self.rhythm_data['essentia'] = RhythmData(beat_onset = self.es_output, infer=True)
+	# def set_rhythm_from_madmom(self):
+	# 	self.rhythm_data['madmom'] = RhythmData(beat=self.mm_output[:,1], beat_onset=self.mm_output[:,0], infer=True)
+	# 	# This will infer the bar numbers [0, 1, 2, ..., nbars] automatically from the beat indices [1,2,3,4,1,2,3,4,1,2,...].
+	#
+	# def set_rhythm_from_qm(self):
+	# 	times,labels = zip(*[(float(item['timestamp']), int(item['label'])) for item in self.qm_output['list']])
+	# 	self.rhythm_data['qm'] = RhythmData(beat = labels, beat_onset = times, infer=True)
+	#
+	# def set_rhythm_from_essentia(self):
+	# 	self.rhythm_data['essentia'] = RhythmData(beat_onset = self.es_output, infer=True)
 	
 	def read_csv_format(self, beat_file_path):
 		csv_data = pd.read_csv(beat_file_path,header=0)
@@ -254,19 +271,18 @@ class Beat(object):
 	def write_csv_format(self, extractor):
 		write_path = self.make_csv_path(extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
-			self.rhythm_data[extractor].to_csv(filehandle, index=False)
-			# FIXME: this will not work anymore, now that rhythm data is a custom object instead of a dataframe. Why did I make it a custom object again?? Why isn't it just a custom object that is a wrapper around a dataframe?
+			self.beats[extractor].as_dataframe().to_csv(filehandle, index=False)
 	
 	def write_beats(self, extractor):
 		write_path = self.make_beat_path(beat_type = 0, extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
-			filehandle.write("\n".join(list(self.rhythm_data[extractor].beat_onset.astype(str))))
+			filehandle.write("\n".join(list(self.beats[extractor].beat_onset.astype(str))))
 	
 	def write_downbeats(self, extractor):
 		write_path = self.make_beat_path(beat_type = 1, extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
 			# self.rhythm_data[extractor].to_csv(filehandle)
-			filehandle.write("\n".join(list(self.rhythm_data[extractor].beat_onset[self.rhythm_data[extractor].beat==1].astype(str))))
+			filehandle.write("\n".join(list(self.beats[extractor].beat_onset[self.beats[extractor].beat==1].astype(str))))
 			
 	def run_estimates(self):
 		self.estimate_beats(extractor_type='qm')
@@ -292,17 +308,17 @@ class Beat(object):
 	def evaluate_estimates(self, ind):
 		# beat_scores = []
 		# dbeat_scores = []
-		ref_beats = np.array(self.rhythm_data['true']['onset'])
-		ref_dbeats = np.array(self.rhythm_data['true']['onset'][self.rhythm_data['true']['beat']==1])
+		ref_beats = self.beats['true'].beat_onset
+		ref_dbeats = self.beats['true'].beat_onset[self.beats['true'].beat==1]
 		# Evaluate beats
 		b_scores = []
 		for ext in ['qm','madmom','essentia']:
-			est_beats = np.array(self.rhythm_data[ext]['onset'])
+			est_beats = self.beats[ext].beat_onset
 			b_scores += [self.get_scores(ref_beats, est_beats)]
 		# Evaluate downbeats:
 		db_scores = []
 		for ext in ['qm','madmom']:
-			est_dbeats = np.array(self.rhythm_data[ext]['onset'][self.rhythm_data[ext]['beat']==1])
+			est_dbeats = np.array(self.beats[ext].beat_onset[self.beats[ext].beat==1])
 			db_scores += [self.get_scores(ref_dbeats, est_dbeats)]	
 		return b_scores, db_scores
 	
@@ -322,13 +338,13 @@ class Beat(object):
 		scores_list = [f_measure, goto, p_score, information_gain] + list(cemgil) + list(continuity)
 		return scores_list
 	
-	@staticmethod
-	def rhythm_beat_times(rhythm_data):
-		return np.array(rhythm_data['onset'])
-
-	@staticmethod
-	def rhythm_downbeat_times(rhythm_data, phase=1):
-		return np.array(rhythm_data['onset'][rhythm_data['beat']==phase])
+	# @staticmethod
+	# def rhythm_beat_times(rhythm_data):
+	# 	return np.array(rhythm_data['onset'])
+	#
+	# @staticmethod
+	# def rhythm_downbeat_times(rhythm_data, phase=1):
+	# 	return np.array(rhythm_data['onset'][rhythm_data['beat']==phase])
 	
 	# def match_octave_phase(self, rhythm_data, rhythm_true):
 		
