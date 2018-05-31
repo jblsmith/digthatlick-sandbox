@@ -1,9 +1,3 @@
-# Beat and downbeat detection sandbox
-
-#
-# 
-# 	Imports
-
 import dataset
 import essentia
 import essentia.standard
@@ -17,13 +11,15 @@ import mir_eval
 import numpy as np
 import os.path
 import pandas as pd
-# import pickle
-# import py_sonicvisualiser
 import re
 import scipy as sp
 import vamp
 
-
+# A RhythmData object contains a two-level rhythm description: beat and bar (which is one level beyond beat). You could use another RhythmData object to describe the sub-beat or super-bar scales.
+# It has three main attributes, all numpy arrays:
+# - beat_onset : real-valued beat onset positions
+# - beat       : integer beat indices (the counts within the bar)
+# - bar        : integer bar indices (the bar numbers)
 class RhythmData(object):
 	def __init__(self, beat_onset, bar=[], beat=[], infer=True):
 		assert (len(beat_onset)>0), "You must provide onsets to instantiate a RhythmData object"
@@ -39,7 +35,8 @@ class RhythmData(object):
 		# If we have nothing at all to go on, just assume it's 4/4, with the first beat = 1.
 		if not len(self.bar) and not len(self.beat):
 			time_sig = 4
-			self.beat = [range(time_sig)[np.mod(i,time_sig)]+1 for i in range(len(self.beat_onset))]
+			# self.beat = [range(time_sig)[np.mod(i,time_sig)]+1 for i in range(len(self.beat_onset))]
+			self.beat = self.project_beats(len(self.beat_onset), 1, time_sig)
 		
 		# If we have beat indices and beat_onset, we can infer the downbeat onsets and bar numbers.
 		if len(self.beat) and not len(self.bar):
@@ -57,6 +54,51 @@ class RhythmData(object):
 	
 	def as_dataframe(self):
 		return pd.DataFrame({'bar':self.bar, 'beat':self.beat, 'onset':self.beat_onset})
+	
+	def get_shifted_beats(self, offset):
+		# Obtain an array with the beats shifted forwards or backwards.
+		# For example, if the beats are [1,2,3,4,1,2,3,4], you can shift them forwards by 2 to get:
+		# 	[3,4,1,2,3,4,1,2]
+		# or backwards by 1 to get:
+		#	[4,1,2,3,4,1,2,3]
+		if offset>0:
+			return np.concatenate((self.beat[offset:], self.project_beats(offset,self.beat[-1]+1,np.max(self.beat))))
+		elif offset<0:
+			return np.concatenate((self.project_beats(-offset,self.beat[0],np.max(self.beat), forwards=False), self.beat[:offset] ))
+		elif offset==0:
+			return self.beat
+		# self.bar = self.bar # FIXME: must recompute bar numbers now
+	
+	def project_beats(self, n_beats, first_beat=1, max_beats=4, forwards=True):
+		# Continue a sequence of beats forwards, or backwards, from a given starting point.
+		# E.g., if the given beat sequence is: [1,2,3,4,1,2,3,4,1]
+		if forwards:
+			return np.array([np.mod(i+(first_beat-1),max_beats)+1 for i in range(n_beats)]).astype(int)
+		if not forwards:
+			return np.array([np.mod(i+(first_beat-1),max_beats)+1 for i in np.arange(-n_beats,0)]).astype(int)
+	
+	def inject_beats(self, submeter=3):
+		# Assume the beats are downbeats and inject beats with a particular spacing (submeter) in between.
+		new_onsets = np.concatenate([np.linspace(self.beat_onset[i],self.beat_onset[i+1],submeter, endpoint=False) for i in range(len(self.beat_onset)-1)])
+		new_onsets = np.append(new_onsets, self.beat_onset[-1])
+		downbeats = np.array([onset in self.beat_onset for onset in new_onsets])
+		new_rhythm = RhythmData(beat_onset = new_onsets, bar=np.cumsum(downbeats))
+		return new_rhythm
+	
+	def superject_beats(self, supermeter, phase_offset=0):
+		# Count the downbeats as beats and assume a hypermeter with a particular phase.
+		new_onsets = np.array([self.beat_onset[i] for i in range(len(self.beat_onset)) if self.beat[i]==1])
+		# bars = np.zeros(len(new_onsets))
+		# bars[phase] = 1
+		bars = np.array([np.mod(i,supermeter)==0 for i in range(len(new_onsets))])
+		new_rhythm = RhythmData(beat_onset = new_onsets, bar=np.cumsum(bars))
+		new_rhythm.beat = new_rhythm.get_shifted_beats(offset=phase_offset)
+		new_rhythm.bar = []
+		new_rhythm.infer_missing_data()
+		return new_rhythm	
+	# def preject_beatsequence(self, n_beats, last_beat=1, max_beats=4):
+	#
+	# 	return np.array([np.mod(i+(first_beat-1),max_beats)+1 for i in range(n_beats)]).astype(int)
 
 class Beat(object):
 
@@ -66,7 +108,11 @@ class Beat(object):
 	# - Loading audio
 
 	def __init__(self):
-		self.data_dir = "/Users/jordan/Documents/data/WeimarJazzDatabase"
+		data_dir_opts = ["/Users/jordan/Documents/data/WeimarJazzDatabase","/home/jordansmith/Documents/data/WeimarJazzDatabase"]
+		for data_dir in data_dir_opts:
+			if os.path.exists(data_dir):
+				self.data_dir = data_dir
+		# self.data_dir = 
 		self.database_path = self.data_dir + "/wjazzd.db"
 		self.output_database_path = self.data_dir + "/output_database.db"
 		self.sv_dir = self.data_dir + "/annotations/SV/"
@@ -109,6 +155,8 @@ class Beat(object):
 	# def make_pickle_path(self, extractor_type = "madmom"):
 	# 	return self.est_dir + extractor_type + "/" + str(self.ind) + ".p"
 
+	# FIXME: since some of this information is needed for meta-analysis, you must re-create it --- just, ideally, from the transcription_info and song_info DB contents..
+	
 	# def manage_metadata(self):
 	# 	metadata_table_path = self.data_dir + "/annotations/weimar_contents.tsv"
 	# 	metadata_table = open(metadata_table_path,'r').readlines()
