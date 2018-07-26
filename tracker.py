@@ -52,22 +52,46 @@ class RhythmData(object):
 				beats[self.bar==val] -= np.min(beats[self.bar==val])-1
 			self.beat = beats
 	
-	def as_dataframe(self):
+	def df(self):
 		return pd.DataFrame({'bar':self.bar, 'beat':self.beat, 'onset':self.beat_onset})
 	
-	def get_shifted_beats(self, offset):
+	def head(self, n=10):
+		return self.df().head(n)
+	
+	def summary(self):
+		print "Median beat period: " + str(np.median(np.diff(self.beat_onset)))
+		print "Number of beats:    " + str(len(self.beat_onset))
+		print "First downbeat:     " + str(self.beat_onset[list(self.beat).index(1)])
+	
+	def period(self):
+		return np.median(np.diff(self.beat_onset))
+	
+	def phase(self):
+		return np.mean(np.mod(self.beat_onset, self.period()))
+		# return self.beat_onset[list(self.beat).index(1)]
+	
+	def downbeats(self):
+		return self.beat_onset[self.beat==1]
+	
+	def __repr__(self):
+		return "<Rhythm period:%s nbeats:%s phase:%s>" % (self.period(),len(self.beat_onset), self.phase())
+	
+	def shift_beats(self, offset):
 		# Obtain an array with the beats shifted forwards or backwards.
 		# For example, if the beats are [1,2,3,4,1,2,3,4], you can shift them forwards by 2 to get:
 		# 	[3,4,1,2,3,4,1,2]
 		# or backwards by 1 to get:
 		#	[4,1,2,3,4,1,2,3]
 		if offset>0:
-			return np.concatenate((self.beat[offset:], self.project_beats(offset,self.beat[-1]+1,np.max(self.beat))))
+			new_beat = np.concatenate((self.beat[offset:], self.project_beats(offset,self.beat[-1]+1,np.max(self.beat))))
 		elif offset<0:
-			return np.concatenate((self.project_beats(-offset,self.beat[0],np.max(self.beat), forwards=False), self.beat[:offset] ))
+			new_beat = np.concatenate((self.project_beats(-offset,self.beat[0],np.max(self.beat), forwards=False), self.beat[:offset] ))
 		elif offset==0:
-			return self.beat
-		# self.bar = self.bar # FIXME: must recompute bar numbers now
+			new_beat = self.beat
+		new_rhythm = RhythmData(beat_onset = self.beat_onset, beat=new_beat)
+		# bars = np.cumsum(np.array(self.beat[1:])<np.array(self.beat[:-1]))
+		# self.bar = np.concatenate(([0], bars))
+		return new_rhythm
 	
 	def project_beats(self, n_beats, first_beat=1, max_beats=4, forwards=True):
 		# Continue a sequence of beats forwards, or backwards, from a given starting point.
@@ -84,21 +108,37 @@ class RhythmData(object):
 		downbeats = np.array([onset in self.beat_onset for onset in new_onsets])
 		new_rhythm = RhythmData(beat_onset = new_onsets, bar=np.cumsum(downbeats))
 		return new_rhythm
+
+	def downscale_meter(self, subdivisions=2, downbeat_indices=[1,3]):
+		# Same as "inject beats", but don't assume that all original beats are downbeats. Instead, allow any beat with a beat index in downbeat_indices to be a downbeat..
+		new_onsets = np.concatenate([np.linspace(self.beat_onset[i],self.beat_onset[i+1],subdivisions, endpoint=False) for i in range(len(self.beat_onset)-1)])
+		new_onsets = np.append(new_onsets, self.beat_onset[-1])
+		orig_beats_that_are_downbeats = [self.beat_onset[i] for i in range(len(self.beat_onset)) if self.beat[i] in downbeat_indices]
+		downbeats = np.array([onset in orig_beats_that_are_downbeats for onset in new_onsets])
+		new_rhythm = RhythmData(beat_onset = new_onsets, bar=np.cumsum(downbeats))
+		return new_rhythm
 	
 	def superject_beats(self, supermeter, phase_offset=0):
 		# Count the downbeats as beats and assume a hypermeter with a particular phase.
+		# Phase offset defines what the beat index of the first beat should be.
 		new_onsets = np.array([self.beat_onset[i] for i in range(len(self.beat_onset)) if self.beat[i]==1])
 		# bars = np.zeros(len(new_onsets))
 		# bars[phase] = 1
-		bars = np.array([np.mod(i,supermeter)==0 for i in range(len(new_onsets))])
-		new_rhythm = RhythmData(beat_onset = new_onsets, bar=np.cumsum(bars))
-		new_rhythm.beat = new_rhythm.get_shifted_beats(offset=phase_offset)
-		new_rhythm.bar = []
-		new_rhythm.infer_missing_data()
-		return new_rhythm	
-	# def preject_beatsequence(self, n_beats, last_beat=1, max_beats=4):
-	#
-	# 	return np.array([np.mod(i+(first_beat-1),max_beats)+1 for i in range(n_beats)]).astype(int)
+		bars = np.cumsum(np.array([np.mod(i,supermeter)==0 for i in range(len(new_onsets))]))
+		new_rhythm = RhythmData(beat_onset = new_onsets, bar=bars)
+		new_rhythm = new_rhythm.shift_beats(offset=phase_offset)
+		# new_rhythm.beat = new_rhythm.get_shifted_beats(offset=phase_offset)
+		# new_rhythm.bar = []
+		# new_rhythm.infer_missing_data()
+		return new_rhythm
+	
+	def upscale_meter(self, supermeter=4, beat_indices=[1,3], phase_offset=0):
+		new_onsets = [x[0] for x in zip(self.beat_onset, self.beat) if x[1] in beat_indices]
+		bars = np.cumsum(np.array([np.mod(i,supermeter)==0 for i in range(len(new_onsets))]))
+		new_rhythm = RhythmData(beat_onset = new_onsets, bar=bars)
+		new_rhythm = new_rhythm.shift_beats(offset=phase_offset)
+		return new_rhythm
+	
 
 class Beat(object):
 
@@ -124,6 +164,8 @@ class Beat(object):
 		self.est_dir = self.data_dir + "/estimates/"
 		# self.manage_metadata()
 		self.load_db()
+		self.load_metadata("track_info")
+		self.load_metadata("solo_info")
 		# Open metadata and extract contents
 		self.sv_paths = glob.glob(self.sv_dir + "*.sv")
 		song_basenames = [re.sub("_FINAL.sv","",re.sub(self.sv_dir,"",path)) for path in self.sv_paths]
@@ -142,21 +184,30 @@ class Beat(object):
 		self.load_true_beats_and_downbeats(ind)
 		self.ind = ind
 	
-	def make_beat_path(self, beat_type = 0, extractor_type = 'madmom'):
-		if beat_type == 0:
-			beat_string = 'beats'
-		elif beat_type == 1:
-			beat_string = 'downbeats'
+	def make_beat_path(self, beat_string, extractor_type = 'madmom'):
+		# if beat_type == 0:
+		# 	beat_string = 'beats'
+		# elif beat_type == 1:
+		# 	beat_string = 'downbeats'
 		return self.est_dir + extractor_type + "/" + str(self.ind) + "-" + beat_string + ".txt"
 	
 	def make_csv_path(self, extractor_type = 'madmom'):
 		return self.est_dir + extractor_type + "/" + str(self.ind) + ".csv"
-	
-	# def make_pickle_path(self, extractor_type = "madmom"):
-	# 	return self.est_dir + extractor_type + "/" + str(self.ind) + ".p"
 
 	# FIXME: since some of this information is needed for meta-analysis, you must re-create it --- just, ideally, from the transcription_info and song_info DB contents..
 	
+	def load_metadata(self, table_field="track_info"):
+		track_info = self.db[table_field].all()
+		data_list_of_lists = [row for row in track_info]
+		if len(data_list_of_lists)==0:
+			print "Sorry, there is no data in that table."
+		else:
+			colnames = data_list_of_lists[0].keys()
+			table_as_df = pd.DataFrame(data=data_list_of_lists, columns=colnames)
+			setattr(self,table_field,table_as_df)
+		# self.track_info = table_as_df
+		# import parsedatetime
+		# self.track_info['year']
 	# def manage_metadata(self):
 	# 	metadata_table_path = self.data_dir + "/annotations/weimar_contents.tsv"
 	# 	metadata_table = open(metadata_table_path,'r').readlines()
@@ -182,37 +233,15 @@ class Beat(object):
 	def load_db(self):
 		self.db = dataset.connect('sqlite:///' + self.database_path)
 	
-	# def load_beats(self, ind):
-	# 	print "Loading beats."
-	# 	beat_file_path = self.beats_dir + str(ind) + ".csv"
-	# 	rhythm_data = self.read_csv_format(beat_file_path)
-	# 	self.raw_data['true'] = rhythm_data
-	
-	# def load_true_beats_and_downbeats(self, ind):
-	# 	print "Loading beats and downbeats."
-	# 	beat_file_path = self.annotation_dir + "magdalena/beat/" + str(ind) + ".txt"
-	# 	downbeat_file_path = self.annotation_dir + "magdalena/downbeat/" + str(ind) + ".txt"
-	# 	beat_list = list(pd.read_csv(beat_file_path,header=-1)[0])
-	# 	downbeat_list = list(pd.read_csv(downbeat_file_path,header=-1)[0])
-	# 	downbeat_inds = [i for i in range(len(beat_list)) if np.min(np.abs(beat_list[i]-np.array(downbeat_list)))<0.001]
-	# 	beat_labels = np.zeros(len(beat_list)).astype(int)
-	# 	beat_labels[downbeat_inds]=1
-	# 	for i in range(1,len(beat_labels)-1):
-	# 		if beat_labels[i]==0:
-	# 			beat_labels[i]=beat_labels[i-1]+1
-	#
-	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
-	# 	new_rhythm_data.onset = beat_list
-	# 	new_rhythm_data.beat = beat_labels
-	# 	bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
-	# 	new_rhythm_data.bar[0] = 0
-	# 	new_rhythm_data.bar[1:] = bars
-	# 	self.rhythm_data['true'] = new_rhythm_data
-	
-	def load_true_beats_and_downbeats(self, ind):
+	def load_true_beats_and_downbeats(self, ind=None):
+		if ind is None:
+			ind=self.ind
 		relevant_beats = self.db['beats'].find(melid=ind)
 		colnames = relevant_beats.keys
 		data_list_of_lists = [row for row in relevant_beats]
+		if len(data_list_of_lists)==0:
+			print "ERROR: There is no such melid!"
+			return
 		table_as_df = pd.DataFrame(data=data_list_of_lists, columns=colnames)
 		self.beats['true'] = RhythmData(beat_onset = table_as_df.onset, beat=table_as_df.beat, bar=table_as_df.bar)
 		# self.beats['true'] = table_as_df[['bar','beat','onset']]
@@ -266,50 +295,6 @@ class Beat(object):
 		elif extractor_type=='essentia':
 			self.beats[extractor_type] = RhythmData(beat_onset = self.raw_data['essentia'], infer=True)
 
-	# def set_rhythm_from_madmom(self):
-	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
-	# 	new_rhythm_data.beat = self.mm_output[:,1].astype(int)
-	# 	new_rhythm_data.onset = self.mm_output[:,0]
-	# 	bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
-	# 	new_rhythm_data.bar[0] = 0
-	# 	new_rhythm_data.bar[1:] = bars
-	# 	self.rhythm_data['madmom'] = new_rhythm_data
-	#
-	# def set_rhythm_from_qm(self):
-	# 	# qm_output = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')    # Beat and downbeat
-	# 	# bt2 = vamp.collect(signal_mono, sr_lib, 'beatroot-vamp:beatroot')               # Beat
-	# 	# bt3 = vamp.collect(signal_mono, sr_lib, 'qm-vamp-plugins:qm-tempotracker')      # Beat and tempo
-	# 	times,labels = zip(*[(float(item['timestamp']), int(item['label'])) for item in self.qm_output['list']])
-	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
-	# 	new_rhythm_data.beat = labels
-	# 	new_rhythm_data.onset = times
-	# 	bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
-	# 	new_rhythm_data.bar[0] = 0
-	# 	new_rhythm_data.bar[1:] = bars
-	# 	self.rhythm_data['qm'] = new_rhythm_data
-	#
-	# def set_rhythm_from_essentia(self):
-	# 	new_rhythm_data = pd.DataFrame(columns=['bar','beat','onset'])
-	# 	new_rhythm_data.onset = self.es_output
-	# 	# Infer downbeat labels naively
-	# 	beat = [[1,2,3,4][np.mod(i,4)] for i in range(len(new_rhythm_data.onset))]
-	# 	new_rhythm_data.beat = beat
-	# 	bars = np.cumsum(np.array(new_rhythm_data.beat[1:])<np.array(new_rhythm_data.beat[:-1]))
-	# 	new_rhythm_data.bar[0] = 0
-	# 	new_rhythm_data.bar[1:] = bars
-	# 	self.rhythm_data['essentia'] = new_rhythm_data
-	
-	# def set_rhythm_from_madmom(self):
-	# 	self.rhythm_data['madmom'] = RhythmData(beat=self.mm_output[:,1], beat_onset=self.mm_output[:,0], infer=True)
-	# 	# This will infer the bar numbers [0, 1, 2, ..., nbars] automatically from the beat indices [1,2,3,4,1,2,3,4,1,2,...].
-	#
-	# def set_rhythm_from_qm(self):
-	# 	times,labels = zip(*[(float(item['timestamp']), int(item['label'])) for item in self.qm_output['list']])
-	# 	self.rhythm_data['qm'] = RhythmData(beat = labels, beat_onset = times, infer=True)
-	#
-	# def set_rhythm_from_essentia(self):
-	# 	self.rhythm_data['essentia'] = RhythmData(beat_onset = self.es_output, infer=True)
-	
 	def read_csv_format(self, beat_file_path):
 		csv_data = pd.read_csv(beat_file_path,header=0)
 		csv_data[['bar','beat']] = csv_data[['bar','beat']].astype(int)
@@ -319,80 +304,197 @@ class Beat(object):
 	def write_csv_format(self, extractor):
 		write_path = self.make_csv_path(extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
-			self.beats[extractor].as_dataframe().to_csv(filehandle, index=False)
+			self.beats[extractor].df().to_csv(filehandle, index=False)
 	
 	def write_beats(self, extractor):
-		write_path = self.make_beat_path(beat_type = 0, extractor_type = extractor)
+		write_path = self.make_beat_path(beat_string = 'beats', extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
 			filehandle.write("\n".join(list(self.beats[extractor].beat_onset.astype(str))))
 	
 	def write_downbeats(self, extractor):
-		write_path = self.make_beat_path(beat_type = 1, extractor_type = extractor)
+		write_path = self.make_beat_path(beat_string = 'downbeats', extractor_type = extractor)
 		with open(write_path,'w') as filehandle:
 			# self.rhythm_data[extractor].to_csv(filehandle)
 			filehandle.write("\n".join(list(self.beats[extractor].beat_onset[self.beats[extractor].beat==1].astype(str))))
-			
-	def run_estimates(self):
-		self.estimate_beats(extractor_type='qm')
-		self.estimate_beats(extractor_type='essentia')
-		self.estimate_beats(extractor_type='madmom')
+	
+	# Shorthand routines for running / writing / loading all estimates
+	def run_all_estimates(self):
+		for extractor_type in ['qm','essentia','madmom']:
+			self.estimate_beats(extractor_type)
+		# self.estimate_beats(extractor_type='qm')
+		# self.estimate_beats(extractor_type='essentia')
+		# self.estimate_beats(extractor_type='madmom')
 	
 	def write_all_rhythms(self):
-		self.write_beats('qm')
-		self.write_beats('essentia')
-		self.write_beats('madmom')
-		self.write_downbeats('qm')
-		self.write_downbeats('madmom')
-		self.write_csv_format('qm')
-		self.write_csv_format('essentia')
-		self.write_csv_format('madmom')
+		for extractor_type in list(set.intersection(set(self.beats.keys()), set(['qm','madmom']))):
+			self.write_beats(extractor_type)
+			self.write_downbeats(extractor_type)
+			self.write_csv_format(extractor_type)
+		for extractor_type in list(set.intersection(set(self.beats.keys()), set(['essentia']))):
+			self.write_beats(extractor_type)
+			self.write_csv_format(extractor_type)
+		# self.write_beats('qm')
+		# self.write_beats('essentia')
+		# self.write_beats('madmom')
+		# self.write_downbeats('qm')
+		# self.write_downbeats('madmom')
+		# self.write_csv_format('qm')
+		# self.write_csv_format('essentia')
+		# self.write_csv_format('madmom')
 	
-	def load_estimates(self, ind):
-		for extractor_type in ['qm','essentia','madmom']:
+	def load_estimates(self, methods=['qm','essentia','madmom']):
+		for extractor_type in methods:
 			csv_path = self.make_csv_path(extractor_type)
 			tmp_rhythm_data = self.read_csv_format(csv_path)
-			self.rhythm_data[extractor_type] = tmp_rhythm_data
+			# self.beats[extractor_type] = tmp_rhythm_data
+			self.beats[extractor_type] = RhythmData(beat_onset=tmp_rhythm_data.onset,bar=tmp_rhythm_data.bar,beat=tmp_rhythm_data.beat)
 
-	def evaluate_estimates(self, ind):
+	def evaluate_estimates(self):
 		# beat_scores = []
 		# dbeat_scores = []
 		ref_beats = self.beats['true'].beat_onset
 		ref_dbeats = self.beats['true'].beat_onset[self.beats['true'].beat==1]
 		# Evaluate beats
-		b_scores = []
-		for ext in ['qm','madmom','essentia']:
-			est_beats = self.beats[ext].beat_onset
-			b_scores += [self.get_scores(ref_beats, est_beats)]
+		# b_scores = []
+		# for ext in ['qm','madmom','essentia']:
+		# 	est_beats = self.beats[ext].beat_onset
+		# 	b_scores += [get_scores(ref_beats, est_beats)]
+		b_scores = {ext: get_scores(ref_beats, self.beats[ext].beat_onset) for ext in ['qm','madmom','essentia'] if ext in self.beats.keys()}
+		db_scores = {ext: get_scores(ref_dbeats, np.array(self.beats[ext].beat_onset[self.beats[ext].beat==1])) for ext in ['qm','madmom'] if ext in self.beats.keys()}
 		# Evaluate downbeats:
-		db_scores = []
-		for ext in ['qm','madmom']:
-			est_dbeats = np.array(self.beats[ext].beat_onset[self.beats[ext].beat==1])
-			db_scores += [self.get_scores(ref_dbeats, est_dbeats)]	
+		# db_scores = []
+		# for ext in ['qm','madmom']:
+		# 	est_dbeats = np.array(self.beats[ext].beat_onset[self.beats[ext].beat==1])
+		# 	db_scores += [get_scores(ref_dbeats, est_dbeats)]
 		return b_scores, db_scores
 	
-	def eval_downbeats(self, ind):
-		est_beat_opts = [self.qm_dt, self.mm_dt]
-		ref_beats = self.true_dt
-		scores = [self.get_scores(np.array(ref_beats), np.array(est_beat_opts[i])) for i in range(len(est_beat_opts))]	
-		return scores	
-	
-	def get_scores(self, ref_beats, est_beats):
-		f_measure = mir_eval.beat.f_measure(ref_beats, est_beats)
-		cemgil = mir_eval.beat.cemgil(ref_beats, est_beats)
-		goto = mir_eval.beat.goto(ref_beats, est_beats)
-		p_score = mir_eval.beat.p_score(ref_beats, est_beats)
-		continuity = mir_eval.beat.continuity(ref_beats, est_beats)
-		information_gain = mir_eval.beat.information_gain(ref_beats, est_beats)
-		scores_list = [f_measure, goto, p_score, information_gain] + list(cemgil) + list(continuity)
-		return scores_list
-	
-	# @staticmethod
-	# def rhythm_beat_times(rhythm_data):
-	# 	return np.array(rhythm_data['onset'])
+	# def eval_downbeats(self):
+	# 	est_beat_opts = [self.qm_dt, self.mm_dt]
+	# 	ref_beats = self.true_dt
+	# 	scores = [get_scores(np.array(ref_beats), np.array(est_beat_opts[i])) for i in range(len(est_beat_opts))]
+	# 	return scores
+
+
+# # # # # 
+# # # # # Evaluation scripts
+# # # # # 
+
+def get_scores(ref_beats, est_beats):
+	f_measure = mir_eval.beat.f_measure(ref_beats, est_beats)
+	cemgil = mir_eval.beat.cemgil(ref_beats, est_beats)
+	goto = mir_eval.beat.goto(ref_beats, est_beats)
+	p_score = mir_eval.beat.p_score(ref_beats, est_beats)
+	continuity = mir_eval.beat.continuity(ref_beats, est_beats)
+	information_gain = mir_eval.beat.information_gain(ref_beats, est_beats)
+	scores_list = [f_measure, goto, p_score, information_gain] + list(cemgil) + list(continuity)
+	return scores_list
+
+def evaluate_rdata(ref_data, est_data):
+	# Evaluate beats
+	ref_beats = ref_data.beat_onset
+	est_beats = est_data.beat_onset
+	beat_eval = get_scores(ref_beats, est_beats)
+	# Evaluate downbeats
+	ref_beats = ref_data.superject_beats(supermeter=4).beat_onset
+	est_beats = est_data.superject_beats(supermeter=4).beat_onset
+	downbeat_eval = get_scores(ref_beats, est_beats)
+	return beat_eval, downbeat_eval		
+
+def find_best_match(rhythm, true_rhythm, n_levels=[2,2], meter=[2,2]):
+	# meter = [submeter, supermeter]
+	# n_levels = [n_sublevels, n_superlevels]
 	#
-	# @staticmethod
-	# def rhythm_downbeat_times(rhythm_data, phase=1):
-	# 	return np.array(rhythm_data['onset'][rhythm_data['beat']==phase])
-	
-	# def match_octave_phase(self, rhythm_data, rhythm_true):
-		
+	# First, create a set of rhythms at different hierarchical levels above and below the main rhythm:
+	rhythms = [(rhythm,"normal")]
+	for i in range(n_levels[0]):
+		rhythms.insert(0, (rhythms[0][0].downscale_meter(subdivisions=meter[0], downbeat_indices=[1,3]), "down"+str(i+1)))
+	for i in range(n_levels[1]):
+		# rhythms.append(rhythms[-1].superject_beats(supermeter=meter[1]))
+		rhythms.append((rhythms[-1][0].upscale_meter(supermeter=4, beat_indices=[1,3], phase_offset=0), "up"+str(i+1)))
+	# Second, for each rhythm, shift it to its various phases:
+	rhy_matrix = [ [(rh[0].shift_beats(i),rh[1]+"_shift"+str(i)) for i in range(4)] for rh in rhythms]
+	grades = np.zeros((len(rhy_matrix),len(rhy_matrix[0]),2,10))
+	for i in range(len(rhy_matrix)):
+		for j in range(len(rhy_matrix[i])):
+			grades[i,j,:,:] = np.array(evaluate_rdata(true_rhythm,rhy_matrix[i][j][0]))
+	best_beat = np.unravel_index(grades[:,:,0,0].argmax(), grades[:,:,0,0].shape)
+	best_downbeat = np.unravel_index(grades[:,:,1,0].argmax(), grades[:,:,1,0].shape)
+	return rhy_matrix, grades, best_beat, best_downbeat
+
+# # # # #
+# # # # # Full dataset analysis routines
+# # # # #
+
+def extract_all_beats(methods=['qm','madmom','essentia'], trackids=None):
+	beat = Beat()
+	if trackids is None:
+		# trackids = beat.track_info.trackid
+		trackids = beat.solo_info.melid
+	for trackid in trackids:
+		print "Doing " + str(trackid)
+		try:
+			# Load audio
+			beat.set_index(trackid)
+			# Run estimators
+			beat.run_all_estimates()
+			# Write outputs to files
+			beat.write_all_rhythms()
+		except KeyboardInterrupt:
+			raise
+		except:
+			print "Failed for " + str(trackid)
+
+def evaluate_all_beats(methods=['qm','madmom','essentia'], trackids=None, level='beats'):
+	beat = Beat()
+	if trackids is None:
+		# trackids = beat.track_info.trackid
+		trackids = beat.solo_info.melid
+	overall_results = np.zeros((len(trackids),len(methods),2,5,4))
+	period_errs = []
+	phase_errs = []
+	for ti,trackid in enumerate(trackids):
+		print "Doing " + str(trackid)
+		beat.ind = trackid
+		beat.load_true_beats_and_downbeats()
+		beat.load_estimates()
+		true = beat.beats['true']
+		errs = [get_phase_and_period_error(beat.beats[method], true, level) for method in methods]
+		period_errs += [zip(*errs)[0]]
+		phase_errs += [zip(*errs)[1]]
+	return period_errs, phase_errs
+		# for mi,method in enumerate(methods):
+		# 	if method in beat.beats.keys():
+		# 		est = beat.beats[method]
+		# 		rhy_matrix, grades, best_beat, best_downbeat = find_best_match(est, true)
+		# 		overall_results[ti,mi,0,:,:] = grades[:,:,0,0]
+		# 		overall_results[ti,mi,1,:,:] = grades[:,:,1,0]
+	# return overall_results
+
+def get_phase_and_period_error(est_rhythm, true_rhythm, level='beats'):
+	if level=='beats':
+		est = est_rhythm.beat_onset
+		true = true_rhythm.beat_onset
+	elif level=='downbeats':
+		est = est_rhythm.downbeats()
+		true = true_rhythm.downbeats()
+	else:
+		print "Error, invalid level. Choose 'beats' or 'downbeats'."
+	est = est[est-np.min(true)>-1]
+	est = est[est-np.max(true)<1]
+	est_period = np.median(np.diff(est))
+	true_period = np.median(np.diff(true))
+	period_info = np.array([est_period, true_period, est_period/true_period, true_period/est_period])
+	distances = np.array([true-est[i] for i in range(len(est))])
+	true_to_est = np.min(np.abs(distances),axis=0)
+	est_to_true = np.min(np.abs(distances),axis=1)
+	# phase_info = np.array([np.median(est_to_true)/est_period, np.median(true_to_est)/true_period,
+	# 						np.median(est_to_true)/true_period, np.median(true_to_est)/est_period])
+	phase_info = np.array([np.median(est_to_true), np.median(true_to_est),
+							np.median(est_to_true)/true_period, np.median(true_to_est)/est_period])
+	# phase_info = np.array((tmp_phase_info, tmp_phase_info / est_period, tmp_phase_info / true_period))
+	# tmp_phase_info = np.array([np.median(est_to_true), np.median(true_to_est)])
+	# phase_info = np.array((tmp_phase_info, tmp_phase_info / est_period, tmp_phase_info / true_period))
+	return period_info, phase_info
+
+# Or should I somehow look at a *histogram* of distances from est-to-true to figure out what's up?
+# NO--- want to look at phase alone, not consider the error in tempo. So to look at phase alone, just want to find out how far from the true beats the estimated ones are.
