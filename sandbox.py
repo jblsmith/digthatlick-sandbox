@@ -1,6 +1,277 @@
+import tracker as t
+reload(t)
+r = t.RhythmData(range(10))
+r.inject_beats(3).df()
+r.superject_beats(3,phase_offset=0).df()
+
+# rhythms, rhy_matrix=r.find_best_match(rhythm, n_levels=[2,2], meter=[2,2]):
+
+
+
+from matplotlib import pyplot as plt
+plt.ion()
+import numpy as np
+import pandas as pd
+
 import tracker
 reload(tracker)
+beat = tracker.Beat()
+# beat.load_metadata('melody')
+beat.load_metadata('sections')
+# beat.load_metadata('notes')
+beat.load_metadata('solo_info')
+
+b_results = tracker.evaluate_all_beats(trackids=beat.solo_info.melid,level='beats')
+db_results = tracker.evaluate_all_beats(methods=['qm','madmom'],trackids=beat.solo_info.melid,level='downbeats')
+
+def process_period_errs(e2t_period, tolerance=0.1):
+	# Sort answers into 4 categories:
+	# 	correct ±tol
+	# 	half period ±tol
+	# 	double period ±tol
+	# 	other
+	n_algs = e2t_period.shape[1]
+	period_errs = np.zeros((n_algs,4))
+	for i in range(n_algs):
+		period_errs[i,0] = np.sum(np.abs(e2t_period[:,i]-1)<tolerance)
+		period_errs[i,1] = np.sum(np.abs(e2t_period[:,i]/2.0-1)<tolerance)
+		period_errs[i,2] = np.sum(np.abs(e2t_period[:,i]*2.0-1)<tolerance)
+		period_errs[i,3] = e2t_period.shape[0] - np.sum(period_errs[i,0:3])
+	period_errs = 1.0*period_errs/e2t_period.shape[0]
+	return period_errs
+
+def plot_period_errs(period_errs):
+	# ax.clf()
+	n_algs=period_errs.shape[0]
+	for i in range(n_algs):
+		plt.bar(
+			x=np.arange(period_errs.shape[1])*(n_algs+1)+i,
+			# x=range(i,period_errs.size+n_algs,n_algs+1),
+			height=period_errs[i],
+			width=1)
+
+# Last dimension of period data (results[0]) gives:
+# [est_period,
+#  true_period,
+#  est_period/true_period,
+#  true_period/est_period]
+e2t_period_b = np.array(b_results[0])[:,:,2]
+e2t_period_db = np.array(db_results[0])[:,:,2]
+# period_info = np.array([est_period, true_period, est_period/true_period, true_period/est_period])
+t2e_phase = np.array(b_results[1])[:,:,1]
+# phase_info = np.array([np.median(est_to_true)/est_period, np.median(true_to_est)/true_period])
+bp_err = process_period_errs(e2t_period_b,0.05)
+dbp_err = process_period_errs(e2t_period_db,0.05)
+save_flag = False
+
+plt.figure(1,figsize=(6,7))
+plt.clf()
+plt.subplot(4,1,1)
+plt.title('Results for BEAT PERIOD')
+plt.hist(e2t_period_b,bins=np.arange(0.05,2.95,0.1))
+plt.ylim(130,280)
+plt.xticks([])
+plt.subplot(4,1,2)
+plt.hist(e2t_period_b,bins=np.arange(0.05,2.95,0.1))
+plt.ylim(0,40)
+plt.xlabel('Ratio of estimated period to true period ')
+plt.subplot(2,1,2)
+plot_period_errs(bp_err)
+n_algs=bp_err.shape[0]
+plt.xticks(range(n_algs/2,bp_err.size+n_algs+1,n_algs+1), ['P','2P','P/2','other'])
+plt.xlabel('Tempo estimate in terms of true period P\n(snapped to 5% of P)')
+plt.legend(['QM','Madmom','Essentia'])
+plt.tight_layout()
+if save_flag:
+	plt.savefig('../17976107dcbyfmvrhjyw/figs/period_analysis_beat.png')
+
+plt.figure(2,figsize=(6,7))
+plt.clf()
+plt.subplot(4,1,1)
+plt.title('Results for DOWNBEAT PERIOD')
+plt.hist(e2t_period_db,bins=np.arange(0.05,2.95,0.1))
+plt.ylim(130,280)
+plt.xticks([])
+plt.subplot(4,1,2)
+plt.hist(e2t_period_db,bins=np.arange(0.05,2.95,0.1))
+plt.ylim(0,40)
+plt.xlabel('Ratio of estimated period to true period ')
+plt.subplot(2,1,2)
+plot_period_errs(dbp_err)
+n_algs=dbp_err.shape[0]
+plt.xticks(range(n_algs/2,dbp_err.size+n_algs+1,n_algs+1), ['P','2P','P/2','other'])
+plt.xlabel('Tempo estimate in terms of true period P\n(snapped to 5% of P)')
+plt.legend(['QM','Madmom','Essentia'])
+plt.tight_layout()
+if save_flag:
+	plt.savefig('../17976107dcbyfmvrhjyw/figs/period_analysis_downbeat.png')
+
+
+
+# Last dimension of phase data (results[1]) gives median of:
+# 	E2T/E  (est_to_true / est)
+# 	T2E/T
+# 	E2T/T
+# 	T2E/E
+plt.figure(1,figsize=(6,4))
+plt.clf()
+plt.subplot(2,1,1)
+plt.title('BEAT PHASE errors')
+hop=0.025
+maxbin=.5
+plt.hist(np.array(b_results[1])[:,:,2],bins=np.arange(-hop*.5,maxbin+hop,hop))
+plt.xlabel('Distance from estimated to true BEAT, as a fraction of true period')
+plt.legend(['QM','Madmom','Essentia'])
+plt.subplot(2,1,2)
+hop=0.025
+maxbin=.5
+plt.hist(np.array(b_results[1])[:,:,0],bins=np.arange(-hop*.5,maxbin+hop,hop))
+plt.xlabel('Distance from estimated to true BEAT, in seconds')
+plt.legend(['QM','Madmom','Essentia'])
+plt.tight_layout()
+if save_flag:
+	plt.savefig('../17976107dcbyfmvrhjyw/figs/phase_analysis_beat.png')
+
+plt.figure(1,figsize=(6,4))
+plt.clf()
+plt.subplot(2,1,1)
+plt.title('DOWNBEAT PHASE errors')
+hop=0.025
+maxbin=.5
+plt.hist(np.array(db_results[1])[:,:,2],bins=np.arange(-hop*.5,maxbin+hop,hop))
+plt.xlabel('Distance from estimated to true DOWNBEAT, as a fraction of true period')
+plt.legend(['QM','Madmom','Essentia'])
+plt.subplot(2,1,2)
+hop=0.1
+maxbin=2
+plt.hist(np.array(db_results[1])[:,:,0],bins=np.arange(-hop*.5,maxbin+hop,hop))
+plt.xlabel('Distance from estimated to true DOWNBEAT, in seconds')
+plt.legend(['QM','Madmom','Essentia'])
+plt.tight_layout()
+if save_flag:
+	plt.savefig('../17976107dcbyfmvrhjyw/figs/phase_analysis_downbeat.png')
+
+
+hop=0.025
+plt.figure(1,figsize=(6,4))
+plt.clf()
+plt.subplot(2,1,1)
+plt.title('PHASE errors')
+plt.hist(np.array(b_results[1])[:,:,2],bins=np.arange(-hop*.5,.5+hop,hop))
+plt.xlabel('Distance from estimated to true BEAT, as a fraction of true period')
+plt.legend(['QM','Madmom','Essentia'])
+plt.subplot(2,1,2)
+plt.hist(np.array(db_results[1])[:,:,2],bins=np.arange(-hop*.5,.5+hop,hop))
+plt.xlabel('Distance from estimated to true DOWNBEAT, as a fraction of true period')
+plt.legend(['QM','Madmom','Essentia'])
+plt.tight_layout()
+if save_flag:
+	plt.savefig('../17976107dcbyfmvrhjyw/figs/phase_analysis_fractional.png')
+
+
+
+Structure of the paper:
+- jazz music, harder or easier?
+- what happens in jazz music?
+- need to compare jazz to other music.
+- a paper is a story.
+emilia gomez, compmusic project, flamenco is hard!
+	indian music, xavier serra
+plenty of jazz music already though. and it's not entirely different'
+MIR for different time signatures?
+simon's team at ICASSP: doing beat tracking + melody tracking... we want beat * melody tracking'
+just stacking output (beat, chord, melody) doesn't help the neural nets. and then you need so much data!'
+to do: make a skeleton of work to do in Overleaf, send it around
+
+
+
+import tracker
+reload(tracker)
+beat=tracker.Beat()
+beat.load_metadata('melody')
+beat.load_metadata('sections')
+beat.load_metadata('notes')
+
+
+maxmap = np.zeros_like(a)
+for i in range(a.shape[0]):
+	for j in range(a.shape[1]):
+		for k in range(a.shape[2]):
+			tmp_array = a[i,j,k,:,:]
+			max_array = tmp_array==np.max(tmp_array)
+			maxmap[i,j,k,:,:] = max_array
+
+		
+rhy_matrix, grades, best_beat, best_downbeat = a
+
+beat = tracker.Beat()
+trackids = beat.solo_info.melid[:5]
+methods = ['qm','essentia','madmom']
+overall_results = np.zeros((len(trackids),len(methods),2,5,5))
+# for ti,trackid in enumerate(trackids):
+ti=0
+trackid=trackids[ti]
+print "Doing " + str(trackid)
+beat.ind = trackid
+beat.load_true_beats_and_downbeats()
+beat.load_estimates()
+true = beat.beats['true']
+# for mi,method in enumerate(methods):
+mi=0
+method=methods[mi]
+# if method in beat.beats.keys():
+est = beat.beats[method]
+rhy_matrix, grades, best_beat, best_downbeat = tracker.find_best_match(est, true)
+overall_results[ti,mi,0,:,:] = grades[:,:,0,0]
+overall_results[ti,mi,1,:,:] = grades[:,:,1,0]
+return overall_results
+
 self = tracker.Beat()
+self.set_index(12)
+self.estimate_beats('qm')
+b,db=self.evaluate_estimates()
+est=self.beats['qm']
+true=self.beats['true']
+
+rhy_matrix, grades, b, d = tracker.find_best_match(est, true, n_levels=[2,2], meter=[2,2])
+np.unravel_index(grades[:,:,1,0].argmax(), grades[:,:,1,0].shape)
+
+rhythms = [rhythm]
+for i in range(n_levels[0]):
+	rhythms.insert(0, rhythms[0].downscale_meter(subdivisions=meter[0], downbeat_indices=[1,3]))
+for i in range(n_levels[1]):
+	# rhythms.append(rhythms[-1].superject_beats(supermeter=meter[1]))
+	rhythms.append(rhythms[-1].upscale_meter(supermeter=4, beat_indices=[1,3], phase_offset=0))
+# Second, for each rhythm, shift it to its various phases:
+rhy_matrix = [ [rh.shift_beats(i) for i in range(4)] for rh in rhythms]
+return rhythms, rhy_matrix
+
+
+rhythm.head()
+rs = self.find_best_match(rhythm)
+for rh in rs:
+	rh.as_dataframe().head(8)
+
+self.run_estimates()
+self.write_all_rhythms()
+
+import time
+self = tracker.Beat()
+t0=time.time()
+for i in range(1,100):
+	self.load_true_beats_and_downbeats(i)
+
+t1=time.time()
+for i in range(1,100):
+	self.load_true_beats_and_downbeats_from_db(i)
+
+t2=time.time()
+
+print "old routine:"
+print t1-t0
+print "new routine:"
+print t2-t1
+
 self.set_index(3)
 self.estimate_beats('qm')
 self.estimate_beats('essentia')
@@ -14,6 +285,10 @@ self.write_downbeats('madmom')
 
 # Code to run all estimators on Jazzomat database and save the outputs
 reload(tracker)
+tracker.extract_all_beats()
+
+tracker.extract_all_beats(methods=['qm','madmom','essentia'], trackids=[123])
+
 beat = tracker.Beat()
 for ind in beat.data.index:
 	try:
