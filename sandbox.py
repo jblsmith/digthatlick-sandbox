@@ -1,13 +1,3 @@
-import tracker as t
-reload(t)
-r = t.RhythmData(range(10))
-r.inject_beats(3).df()
-r.superject_beats(3,phase_offset=0).df()
-
-# rhythms, rhy_matrix=r.find_best_match(rhythm, n_levels=[2,2], meter=[2,2]):
-
-
-
 from matplotlib import pyplot as plt
 plt.ion()
 import numpy as np
@@ -25,6 +15,7 @@ b_results = tracker.evaluate_all_beats(trackids=beat.solo_info.melid,level='beat
 db_results = tracker.evaluate_all_beats(methods=['qm','madmom'],trackids=beat.solo_info.melid,level='downbeats')
 
 def process_period_errs(e2t_period, tolerance=0.1):
+	# FYI we're looking at (median est period) / (median true period)
 	# Sort answers into 4 categories:
 	# 	correct ±tol
 	# 	half period ±tol
@@ -39,6 +30,23 @@ def process_period_errs(e2t_period, tolerance=0.1):
 		period_errs[i,3] = e2t_period.shape[0] - np.sum(period_errs[i,0:3])
 	period_errs = 1.0*period_errs/e2t_period.shape[0]
 	return period_errs
+
+def process_phase_errs(et2_phase, tolerance=0.1):
+	# FYI we're looking at median value of (min distance from est beat to true beat) / (true period)
+	# Sort answers into 4 categories:
+	# 	correct ±tol
+	# 	half phase ±tol
+	# 	quarter phase ±tol
+	# 	other
+	n_algs = et2_phase.shape[1]
+	phase_errs = np.zeros((n_algs,4))
+	for i in range(n_algs):
+		phase_errs[i,0] = np.sum(np.abs(et2_phase[:,i])<tolerance)
+		phase_errs[i,1] = np.sum(np.abs(et2_phase[:,i]-0.5)<tolerance)
+		phase_errs[i,2] = np.sum(np.abs(et2_phase[:,i]-0.25)<tolerance)
+		phase_errs[i,3] = et2_phase.shape[0] - np.sum(phase_errs[i,0:3])
+	phase_errs = 1.0*phase_errs/et2_phase.shape[0]
+	return phase_errs
 
 def plot_period_errs(period_errs):
 	# ax.clf()
@@ -57,11 +65,13 @@ def plot_period_errs(period_errs):
 #  true_period/est_period]
 e2t_period_b = np.array(b_results[0])[:,:,2]
 e2t_period_db = np.array(db_results[0])[:,:,2]
-# period_info = np.array([est_period, true_period, est_period/true_period, true_period/est_period])
-t2e_phase = np.array(b_results[1])[:,:,1]
-# phase_info = np.array([np.median(est_to_true)/est_period, np.median(true_to_est)/true_period])
+e2t_phase_b = np.array(b_results[1])[:,:,2]
+e2t_phase_db = np.array(db_results[1])[:,:,2]
+
 bp_err = process_period_errs(e2t_period_b,0.05)
 dbp_err = process_period_errs(e2t_period_db,0.05)
+ph_err = process_phase_errs(e2t_phase_b,0.05)
+dph_err = process_phase_errs(e2t_phase_db,0.05)
 save_flag = False
 
 plt.figure(1,figsize=(6,7))
@@ -132,20 +142,29 @@ plt.tight_layout()
 if save_flag:
 	plt.savefig('../17976107dcbyfmvrhjyw/figs/phase_analysis_beat.png')
 
-plt.figure(1,figsize=(6,4))
+plt.figure(3,figsize=(6,4))
 plt.clf()
-plt.subplot(2,1,1)
+plt.subplot(3,1,1)
 plt.title('DOWNBEAT PHASE errors')
-hop=0.025
-maxbin=.5
-plt.hist(np.array(db_results[1])[:,:,2],bins=np.arange(-hop*.5,maxbin+hop,hop))
-plt.xlabel('Distance from estimated to true DOWNBEAT, as a fraction of true period')
-plt.legend(['QM','Madmom','Essentia'])
-plt.subplot(2,1,2)
 hop=0.1
 maxbin=2
 plt.hist(np.array(db_results[1])[:,:,0],bins=np.arange(-hop*.5,maxbin+hop,hop))
 plt.xlabel('Distance from estimated to true DOWNBEAT, in seconds')
+plt.legend(['QM','Madmom','Essentia'])
+plt.subplot(3,1,3)
+
+plot_period_errs(dbp_err)
+n_algs=dbp_err.shape[0]
+plt.xticks(range(n_algs/2,dbp_err.size+n_algs+1,n_algs+1), ['0','0.5 P','0.25 P','other'])
+plt.xlabel('Median phase distance from true phase in terms of true period P\n(snapped to 5% of P)')
+plt.legend(['QM','Madmom'])
+plt.tight_layout()
+
+plt.subplot(3,1,2)
+hop=0.025
+maxbin=.5
+plt.hist(np.array(db_results[1])[:,:,2],bins=np.arange(-hop*.5,maxbin+hop,hop))
+plt.xlabel('Distance from estimated to true DOWNBEAT, as a fraction of true period')
 plt.legend(['QM','Madmom','Essentia'])
 plt.tight_layout()
 if save_flag:
@@ -167,6 +186,8 @@ plt.legend(['QM','Madmom','Essentia'])
 plt.tight_layout()
 if save_flag:
 	plt.savefig('../17976107dcbyfmvrhjyw/figs/phase_analysis_fractional.png')
+
+
 
 
 

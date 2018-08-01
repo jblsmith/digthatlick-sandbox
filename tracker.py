@@ -196,7 +196,7 @@ class Beat(object):
 
 	# FIXME: since some of this information is needed for meta-analysis, you must re-create it --- just, ideally, from the transcription_info and song_info DB contents..
 	
-	def load_metadata(self, table_field="track_info"):
+	def load_metadata(self, table_field="track_info", set_table_name=None):
 		track_info = self.db[table_field].all()
 		data_list_of_lists = [row for row in track_info]
 		if len(data_list_of_lists)==0:
@@ -204,7 +204,10 @@ class Beat(object):
 		else:
 			colnames = data_list_of_lists[0].keys()
 			table_as_df = pd.DataFrame(data=data_list_of_lists, columns=colnames)
-			setattr(self,table_field,table_as_df)
+			if set_table_name is None:
+				setattr(self,table_field,table_as_df)
+			else:
+				setattr(self,set_table_name,table_as_df)
 		# self.track_info = table_as_df
 		# import parsedatetime
 		# self.track_info['year']
@@ -263,6 +266,14 @@ class Beat(object):
 		self.S_mono = librosa.core.stft(self.signal_mono, n_fft=self.n_fft, hop_length=self.hop_length)
 		self.V_mono = np.abs(self.S_mono)
 		print "Audio loaded and spectrum precomputed."
+	
+
+	def load_and_write_structures(self, ind=None, abspath=None):
+		if ind is None:
+			ind = self.ind
+		if abspath is None:
+			folder = self.structure_path
+		# Continue importing extract_structures stuff to here.
 		
 	def estimate_beats(self, extractor_type='qm'):
 		assert extractor_type in ['qm','madmom','essentia']
