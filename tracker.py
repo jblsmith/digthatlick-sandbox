@@ -52,29 +52,36 @@ class RhythmData(object):
 				beats[self.bar==val] -= np.min(beats[self.bar==val])-1
 			self.beat = beats
 	
-	def df(self):
-		return pd.DataFrame({'bar':self.bar, 'beat':self.beat, 'onset':self.beat_onset})
+	def df(self, with_eval=False):
+		if not with_eval:
+			return pd.DataFrame({'bar':self.bar, 'beat':self.beat, 'onset':self.beat_onset})
+		else:
+			if hasattr(self,'dist_to_beat'):
+				return pd.DataFrame({'bar':self.bar, 'beat':self.beat, 'onset':self.beat_onset, 'dist_to_beat':self.dist_to_beat, 'dist_to_db':self.dist_to_db})
 	
 	def head(self, n=10):
 		return self.df().head(n)
-	
-	def summary(self):
-		print "Median beat period: " + str(np.median(np.diff(self.beat_onset)))
-		print "Number of beats:    " + str(len(self.beat_onset))
-		print "First downbeat:     " + str(self.beat_onset[list(self.beat).index(1)])
-	
+		
 	def period(self):
 		return np.median(np.diff(self.beat_onset))
 	
-	def phase(self):
-		return np.mean(np.mod(self.beat_onset, self.period()))
-		# return self.beat_onset[list(self.beat).index(1)]
+	# def phase(self):
+	#	return np.median(np.mod(self.beat_onset, self.period()))
+	#	# return self.beat_onset[list(self.beat).index(1)]
+	
+	def first_db(self):
+		return self.beat_onset[list(self.beat).index(1)]
 	
 	def downbeats(self):
 		return self.beat_onset[self.beat==1]
 	
 	def __repr__(self):
-		return "<Rhythm period:%s nbeats:%s phase:%s>" % (self.period(),len(self.beat_onset), self.phase())
+		return "<Rhythm period:%s nbeats:%s first:%s>" % (self.period(),len(self.beat_onset), self.first_db())
+
+	def summary(self):
+		print "Median beat period: " + str(self.period())
+		print "Number of beats:    " + str(len(self.beat_onset))
+		print "First downbeat:     " + str(self.first_db())
 	
 	def shift_beats(self, offset):
 		# Obtain an array with the beats shifted forwards or backwards.
@@ -108,15 +115,6 @@ class RhythmData(object):
 		downbeats = np.array([onset in self.beat_onset for onset in new_onsets])
 		new_rhythm = RhythmData(beat_onset = new_onsets, bar=np.cumsum(downbeats))
 		return new_rhythm
-
-	def downscale_meter(self, subdivisions=2, downbeat_indices=[1,3]):
-		# Same as "inject beats", but don't assume that all original beats are downbeats. Instead, allow any beat with a beat index in downbeat_indices to be a downbeat..
-		new_onsets = np.concatenate([np.linspace(self.beat_onset[i],self.beat_onset[i+1],subdivisions, endpoint=False) for i in range(len(self.beat_onset)-1)])
-		new_onsets = np.append(new_onsets, self.beat_onset[-1])
-		orig_beats_that_are_downbeats = [self.beat_onset[i] for i in range(len(self.beat_onset)) if self.beat[i] in downbeat_indices]
-		downbeats = np.array([onset in orig_beats_that_are_downbeats for onset in new_onsets])
-		new_rhythm = RhythmData(beat_onset = new_onsets, bar=np.cumsum(downbeats))
-		return new_rhythm
 	
 	def superject_beats(self, supermeter, phase_offset=0):
 		# Count the downbeats as beats and assume a hypermeter with a particular phase.
@@ -132,6 +130,15 @@ class RhythmData(object):
 		# new_rhythm.infer_missing_data()
 		return new_rhythm
 	
+	def downscale_meter(self, subdivisions=2, downbeat_indices=[1,3]):
+		# Same as "inject beats", but don't assume that all original beats are downbeats. Instead, allow any beat with a beat index in downbeat_indices to be a downbeat..
+		new_onsets = np.concatenate([np.linspace(self.beat_onset[i],self.beat_onset[i+1],subdivisions, endpoint=False) for i in range(len(self.beat_onset)-1)])
+		new_onsets = np.append(new_onsets, self.beat_onset[-1])
+		orig_beats_that_are_downbeats = [self.beat_onset[i] for i in range(len(self.beat_onset)) if self.beat[i] in downbeat_indices]
+		downbeats = np.array([onset in orig_beats_that_are_downbeats for onset in new_onsets])
+		new_rhythm = RhythmData(beat_onset = new_onsets, bar=np.cumsum(downbeats))
+		return new_rhythm
+	
 	def upscale_meter(self, supermeter=4, beat_indices=[1,3], phase_offset=0):
 		new_onsets = [x[0] for x in zip(self.beat_onset, self.beat) if x[1] in beat_indices]
 		bars = np.cumsum(np.array([np.mod(i,supermeter)==0 for i in range(len(new_onsets))]))
@@ -139,6 +146,53 @@ class RhythmData(object):
 		new_rhythm = new_rhythm.shift_beats(offset=phase_offset)
 		return new_rhythm
 	
+	def compare_beats(self, true_rhythmdata, thresh_rule='relative', thresh=0.1):
+		est_beat = self.beat_onset
+		tru_beat = true_rhythmdata.beat_onset
+		tru_db = true_rhythmdata.downbeats()
+		distances_b = np.array([tru_beat-eb for eb in est_beat])
+		argmin_b = np.argmin(np.abs(distances_b),axis=1)
+		self.dist_to_beat = np.array([distances_b[i,argmin_b[i]] for i in range(len(argmin_b))])
+		distances_db = np.array([tru_db-eb for eb in est_beat])
+		argmin_db = np.argmin(np.abs(distances_db),axis=1)
+		self.dist_to_db = np.array([distances_db[i,argmin_db[i]] for i in range(len(argmin_db))])
+		# self.dist_to_beat = np.min(np.abs(distances_b),axis=1)
+		# self.dist_to_db = np.min(np.abs(distances_db),axis=1)
+		# Now, typify the rerors:
+		true_period_b = np.median(np.diff(tru_beat))
+		true_period_db = np.median(np.diff(tru_db))
+		self.beat_errors = self.typify_errors(self.dist_to_beat, true_period_b, thresh_rule, thresh)
+		self.db_errors = self.typify_errors(self.dist_to_db, true_period_db, thresh_rule, thresh)
+		# We want to know whether estimates are 0, 1, 2 or 3 quarter phases off the correct value.
+	
+	def compare_times(self, true_rhythmdata, thresh_rule='relative', thresh=0.1, scale='Beat'):
+		assert scale in ['Beat','Downbeat'], "Scale options are Beat and Downbeat."
+		assert thresh_rule in ['relative','absolute'], "Thresh_rule options are relative and absolute."
+		if scale=='Beat':
+			est_beat = self.beat_onset
+			tru_beat = true_rhythmdata.beat_onset
+		elif scale=='Downbeat':
+			est_beat = self.downbeats()
+			tru_beat = true_rhythmdata.downbeats()
+		distances = np.array([tru_beat - eb for eb in est_beat])
+		argmin = np.argmin(np.abs(distances),axis=1)
+		dist_to_beat = np.array([distances[i,argmin[i]] for i in range(len(argmin))])
+		# Typify the rerors:
+		true_period = np.median(np.diff(tru_beat))
+		beat_error_types = self.typify_errors(dist_to_beat, true_period, thresh_rule, thresh)
+		return dist_to_beat, beat_error_types
+	
+	def typify_errors(self, beat_offsets, true_period, thresh_rule, thresh):
+		if thresh_rule is 'relative':
+			denom = true_period
+		elif thresh_rule is 'absolute':
+			denom = 1.0
+		output = np.ones_like(beat_offsets)*(-1)
+		output[np.abs(beat_offsets/denom - .25) < thresh] = 3
+		output[np.abs(np.abs(beat_offsets)/denom - .5) < thresh] = 2
+		output[np.abs(beat_offsets/denom + .25) < thresh] = 1
+		output[np.abs(beat_offsets/denom) < thresh] = 0
+		return output
 
 class Beat(object):
 
@@ -163,6 +217,7 @@ class Beat(object):
 		self.solo_dir = self.data_dir + "/annotations/solo/"
 		self.est_dir = self.data_dir + "/estimates/"
 		# self.manage_metadata()
+		self.md = {}
 		self.load_db()
 		self.load_metadata("track_info")
 		self.load_metadata("solo_info")
@@ -194,8 +249,6 @@ class Beat(object):
 	def make_csv_path(self, extractor_type = 'madmom'):
 		return self.est_dir + extractor_type + "/" + str(self.ind) + ".csv"
 
-	# FIXME: since some of this information is needed for meta-analysis, you must re-create it --- just, ideally, from the transcription_info and song_info DB contents..
-	
 	def load_metadata(self, table_field="track_info", set_table_name=None):
 		track_info = self.db[table_field].all()
 		data_list_of_lists = [row for row in track_info]
@@ -236,10 +289,10 @@ class Beat(object):
 	def load_db(self):
 		self.db = dataset.connect('sqlite:///' + self.database_path)
 	
-	def load_true_beats_and_downbeats(self, ind=None):
-		if ind is None:
-			ind=self.ind
-		relevant_beats = self.db['beats'].find(melid=ind)
+	def load_true_beats_and_downbeats(self, melid=None):
+		if melid is None:
+			melid=self.ind
+		relevant_beats = self.db['beats'].find(melid=melid)
 		colnames = relevant_beats.keys
 		data_list_of_lists = [row for row in relevant_beats]
 		if len(data_list_of_lists)==0:
@@ -355,18 +408,23 @@ class Beat(object):
 	
 	def load_estimates(self, methods=['qm','essentia','madmom']):
 		for extractor_type in methods:
-			csv_path = self.make_csv_path(extractor_type)
-			tmp_rhythm_data = self.read_csv_format(csv_path)
-			# self.beats[extractor_type] = tmp_rhythm_data
-			self.beats[extractor_type] = RhythmData(beat_onset=tmp_rhythm_data.onset,bar=tmp_rhythm_data.bar,beat=tmp_rhythm_data.beat)
+			try:
+				csv_path = self.make_csv_path(extractor_type)
+				tmp_rhythm_data = self.read_csv_format(csv_path)
+				# self.beats[extractor_type] = tmp_rhythm_data
+				self.beats[extractor_type] = RhythmData(beat_onset=tmp_rhythm_data.onset,bar=tmp_rhythm_data.bar,beat=tmp_rhythm_data.beat)
+			except:
+				print "Failed to load estimates for " + extractor_type
 
-	def evaluate_estimates(self):
+	def evaluate_estimates(self, thresh_rule='relative', thresh=0.1):
+		for exttype in self.beats.keys():
+			self.beats[exttype].compare_beats(self.beats['true'], thresh_rule=thresh_rule, thresh=thresh)
 		# beat_scores = []
 		# dbeat_scores = []
 		ref_beats = self.beats['true'].beat_onset
 		ref_dbeats = self.beats['true'].beat_onset[self.beats['true'].beat==1]
 		# Evaluate beats
-		# b_scores = []
+		# b_scores = [] beat.beats[exttype
 		# for ext in ['qm','madmom','essentia']:
 		# 	est_beats = self.beats[ext].beat_onset
 		# 	b_scores += [get_scores(ref_beats, est_beats)]
@@ -509,3 +567,95 @@ def get_phase_and_period_error(est_rhythm, true_rhythm, level='beats'):
 
 # Or should I somehow look at a *histogram* of distances from est-to-true to figure out what's up?
 # NO--- want to look at phase alone, not consider the error in tempo. So to look at phase alone, just want to find out how far from the true beats the estimated ones are.
+
+
+import csv
+import os
+def fetch_feat(beat, trackid=None, melid=None, feature='chroma'):
+	if feature=='chroma':
+		feat_path = '/home/jordansmith/Documents/data/WeimarJazzDatabase/audio/chromagrams'
+		feat_suffix = '_vamp_qm-vamp-plugins_qm-chromagram_chromagram.csv'
+	elif feature=='mfcc':
+		feat_path = '/home/jordansmith/Documents/data/WeimarJazzDatabase/audio/mfccs'
+		feat_suffix = '_vamp_qm-vamp-plugins_qm-mfcc_coefficients.csv'
+	if trackid is not None:
+		track_string = '/' + list(beat.track_info.loc[beat.track_info.trackid==trackid].filename_track)[0]
+	elif melid is not None:
+		track_string = '_solo/' + list(beat.transcription_info.loc[beat.transcription_info.melid==melid].filename_solo)[0]
+	track_path = feat_path + track_string + feat_suffix
+	if not os.path.exists(track_path):
+		print "File not found: " + track_path
+		return None, None
+	# Use pandas instead of csv reader? Or leave like this?
+	with open(track_path, 'rb') as f:
+		reader = csv.reader(f)
+		data = np.array([r for r in reader])
+	time = np.array( [float(x) for x in data[:,0]] )
+	feat = np.array( [[float(x) for x in row] for row in data[:,1:]] )
+	return time, feat
+
+import matplotlib.pyplot as plt
+def plot_beats(times, y=0, color='g', fig_handle=None):
+	if fig_handle is not None:
+		plt.figure(fig_handle)
+	for t in times:
+		# plt.plot((x1,x2), (y1,y2), colour)
+		plt.plot((t,t), (y-.45,y+.45), color)
+
+def plot_all_beats(beat_set, scale='beat', thresh=0.1, fig_handle=None):
+	# beat_set = beat.beats
+	ex_types = [x for x in beat_set.keys() if x is not 'true']
+	if scale is 'Beat':
+		plot_beats(beat_set['true'].beat_onset,0,'black', fig_handle=fig_handle)
+		for i,extype in enumerate(ex_types):
+			right_set = beat_set[extype].beat_onset[np.abs(beat_set[extype].dist_to_beat)<thresh]
+			wrong_set = beat_set[extype].beat_onset[np.abs(beat_set[extype].dist_to_beat)>=thresh]
+			if len(right_set)>0:
+				# Plot correct ones in green
+				plot_beats(right_set, i+1, 'green', fig_handle=fig_handle)
+			if len(wrong_set)>0:
+				# Plot incorrect ones in red
+				plot_beats(wrong_set, i+1, 'red', fig_handle=fig_handle)
+	elif scale is 'Downbeat':
+		plot_beats(beat_set['true'].downbeats(),0,'black', fig_handle=fig_handle)
+		for i,extype in enumerate(ex_types):
+			downbeat_accuracy = beat_set[extype].dist_to_db[beat_set[extype].beat==1]
+			right_set = beat_set[extype].downbeats()[downbeat_accuracy<thresh]
+			wrong_set = beat_set[extype].downbeats()[downbeat_accuracy>=thresh]
+			if len(right_set)>0:
+				# Plot correct ones in green
+				plot_beats(right_set, i+1, 'green', fig_handle=fig_handle)
+			if len(wrong_set)>0:
+				# Plot incorrect ones in red
+				plot_beats(wrong_set, i+1, 'red', fig_handle=fig_handle)
+	plt.yticks(range(len(beat_set.keys())), ['true'] + [x for x in beat_set.keys() if x is not 'true'])
+
+def plot_beats_at_height(times, y=0, h=.9, color='g', fig_handle=None):
+	if fig_handle is not None:
+		plt.figure(fig_handle)
+	for t in times:
+		# plt.plot((x1,x2), (y1,y2), colour)
+		plt.plot((t,t), (y-.5*h,y+.5*h), color)
+
+def compare_times(est_beat, tru_beat, thresh_rule='relative', thresh=0.1):
+	assert thresh_rule in ['relative','absolute'], "Thresh_rule options are relative and absolute."
+	distances = np.array([tru_beat - eb for eb in est_beat])
+	argmin = np.argmin(np.abs(distances),axis=1)
+	dist_to_beat = np.array([distances[i,argmin[i]] for i in range(len(argmin))])
+	# Typify the rerors:
+	true_period = np.median(np.diff(tru_beat))
+	beat_error_types = typify_errors(dist_to_beat, true_period, thresh_rule, thresh)
+	return dist_to_beat, beat_error_types
+
+def typify_errors(beat_offsets, true_period, thresh_rule, thresh):
+	if thresh_rule is 'relative':
+		denom = true_period
+	elif thresh_rule is 'absolute':
+		denom = 1.0
+	output = np.ones_like(beat_offsets)*(-1)
+	output[np.abs(beat_offsets/denom - .25) < thresh] = 3
+	output[np.abs(np.abs(beat_offsets)/denom - .5) < thresh] = 2
+	output[np.abs(beat_offsets/denom + .25) < thresh] = 1
+	output[np.abs(beat_offsets/denom) < thresh] = 0
+	return output
+
