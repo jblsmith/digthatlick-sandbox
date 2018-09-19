@@ -14,12 +14,14 @@ import pandas as pd
 import re
 import scipy as sp
 import vamp
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
 
 # A RhythmData object contains a two-level rhythm description: beat and bar (which is one level beyond beat). You could use another RhythmData object to describe the sub-beat or super-bar scales.
 # It has three main attributes, all numpy arrays:
 # - beat_onset : real-valued beat onset positions
-# - beat       : integer beat indices (the counts within the bar)
-# - bar        : integer bar indices (the bar numbers)
+# - beat	   : integer beat indices (the counts within the bar)
+# - bar		: integer bar indices (the bar numbers)
 class RhythmData(object):
 	def __init__(self, beat_onset, bar=[], beat=[], infer=True):
 		assert (len(beat_onset)>0), "You must provide onsets to instantiate a RhythmData object"
@@ -80,8 +82,8 @@ class RhythmData(object):
 
 	def summary(self):
 		print "Median beat period: " + str(self.period())
-		print "Number of beats:    " + str(len(self.beat_onset))
-		print "First downbeat:     " + str(self.first_db())
+		print "Number of beats:	" + str(len(self.beat_onset))
+		print "First downbeat:	 " + str(self.first_db())
 	
 	def shift_beats(self, offset):
 		# Obtain an array with the beats shifted forwards or backwards.
@@ -226,8 +228,8 @@ class Beat(object):
 		song_basenames = [re.sub("_FINAL.sv","",re.sub(self.sv_dir,"",path)) for path in self.sv_paths]
 		self.stripped_basenames = song_basenames[:]
 		for i in range(len(song_basenames)):
-		    if song_basenames[i][-2] == "-":
-		        self.stripped_basenames[i] = song_basenames[i][:-2]
+			if song_basenames[i][-2] == "-":
+				self.stripped_basenames[i] = song_basenames[i][:-2]
 		self.fs = 44100
 		self.n_fft = 2048
 		self.hop_length = 512
@@ -332,7 +334,7 @@ class Beat(object):
 		assert extractor_type in ['qm','madmom','essentia']
 		if extractor_type == 'qm':
 			print "Extracting beats using QM Vamp plugin..."
-			self.raw_data[extractor_type] = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')    # Beat and downbeat
+			self.raw_data[extractor_type] = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')	# Beat and downbeat
 		elif extractor_type == 'essentia':
 			print "Extracting beats using Essentia..."
 			beat_tracker = essentia.standard.BeatTrackerMultiFeature()
@@ -659,3 +661,55 @@ def typify_errors(beat_offsets, true_period, thresh_rule, thresh):
 	output[np.abs(beat_offsets/denom) < thresh] = 0
 	return output
 
+def plot_all_from_melid(beat, solofilename, scale, thresh_val, thresh_rule):
+	song_choices = {beat.transcription_info.filename_solo.loc[melid]:
+					beat.transcription_info.melid.loc[melid] for melid in beat.transcription_info.index}
+	melid = song_choices[solofilename]
+	#	 print thresh_mode_widget.value
+	fig_handle = 'Comparison of beat tracking outputs'
+	plt.figure(fig_handle, figsize = [9,4])
+	plt.gcf().clf()
+	gs = gridspec.GridSpec(1, 2, width_ratios=[4, 1])
+	plt.subplot(gs[0])
+	beat.ind = melid
+	beat.load_true_beats_and_downbeats()
+	beat.load_estimates()
+	b_scores, db_scores = beat.evaluate_estimates()
+	error_codes = [-1, 0, 1, 2, 3]
+	# error_names = ['Wrong', 'Perfect', '+Q', 'Half', '-Q']
+	error_colors = ['red', '#00FF00', 'purple', 'green', 'orange']
+	extension_types = [k for k in beat.beats.keys() if k is not 'true']
+	if scale is 'Downbeat':
+		tru_hits = np.zeros_like(beat.beats['true'].downbeats())-1
+	else:
+		tru_hits = np.zeros_like(beat.beats['true'].beat_onset)-1
+	for ext_i, ext_type in enumerate(extension_types):
+		if scale is 'Downbeat':
+			est_times = beat.beats[ext_type].downbeats()
+			tru_times = beat.beats['true'].downbeats()
+		else:
+			est_times = beat.beats[ext_type].beat_onset
+			tru_times = beat.beats['true'].beat_onset
+		dists, errs = compare_times(est_times, tru_times,
+											thresh=thresh_val,
+											thresh_rule=thresh_rule)
+		dists_rev, errs_rev = compare_times(tru_times, est_times,
+													thresh=thresh_val,
+													thresh_rule=thresh_rule)
+		tru_hits[errs_rev==0] = 0
+		for type_i,color in zip(error_codes, error_colors):
+			times_subset = [est_times[i] for i in range(len(est_times)) if errs[i]==type_i]
+			plot_beats_at_height(times_subset, y=1+ext_i+type_i*.1, h=0.3, color=color, fig_handle=fig_handle)
+	for type_i,color in zip([-1,0], ['red','black']):
+		plot_beats_at_height(tru_times[tru_hits==type_i],
+									 # y=type_i*.25+.25, h=0.5, color=color, fig_handle=fig_handle)
+									 y=0, h=0.5+type_i*.2, color=color, fig_handle=fig_handle)
+	plt.ylim([-.5, len(extension_types)+.5])
+	plt.yticks(range(len(extension_types)+1), ['true'] + extension_types)
+	plt.title(solofilename)
+	plt.subplot(gs[1])
+	if scale is 'Downbeat':
+		plt.plot(np.array(db_scores.values()).transpose())
+	else:
+		plt.plot(np.array(b_scores.values()).transpose())
+	plt.tight_layout()
