@@ -418,33 +418,19 @@ class Beat(object):
 			except:
 				print "Failed to load estimates for " + extractor_type
 
-	def evaluate_estimates(self, thresh_rule='relative', thresh=0.1):
+	def evaluate_estimates(self, thresh_rule='relative', thresh=0.1, scale='Downbeat'):
 		for exttype in self.beats.keys():
 			self.beats[exttype].compare_beats(self.beats['true'], thresh_rule=thresh_rule, thresh=thresh)
-		# beat_scores = []
-		# dbeat_scores = []
 		ref_beats = self.beats['true'].beat_onset
-		ref_dbeats = self.beats['true'].beat_onset[self.beats['true'].beat==1]
-		# Evaluate beats
-		# b_scores = [] beat.beats[exttype
-		# for ext in ['qm','madmom','essentia']:
-		# 	est_beats = self.beats[ext].beat_onset
-		# 	b_scores += [get_scores(ref_beats, est_beats)]
+		ref_dbeats = self.beats['true'].downbeats()
 		b_scores = {ext: get_scores(ref_beats, self.beats[ext].beat_onset) for ext in ['qm','madmom','essentia'] if ext in self.beats.keys()}
-		db_scores = {ext: get_scores(ref_dbeats, np.array(self.beats[ext].beat_onset[self.beats[ext].beat==1])) for ext in ['qm','madmom'] if ext in self.beats.keys()}
-		# Evaluate downbeats:
-		# db_scores = []
-		# for ext in ['qm','madmom']:
-		# 	est_dbeats = np.array(self.beats[ext].beat_onset[self.beats[ext].beat==1])
-		# 	db_scores += [get_scores(ref_dbeats, est_dbeats)]
+		db_scores = {ext: get_scores(ref_dbeats, self.beats[ext].downbeats()) for ext in ['qm','madmom', 'essentia'] if ext in self.beats.keys()}
 		return b_scores, db_scores
 	
-	# def eval_downbeats(self):
-	# 	est_beat_opts = [self.qm_dt, self.mm_dt]
-	# 	ref_beats = self.true_dt
-	# 	scores = [get_scores(np.array(ref_beats), np.array(est_beat_opts[i])) for i in range(len(est_beat_opts))]
-	# 	return scores
-
+	# TODO: finish this part!
+	# def get_all_eval_measures(self, thresh_rule='relative', thresh=0.1, scale='Downbeat'):
+	# 	get_scores
+	# 	get_phase_and_period_error(est_rhythm, true_rhythm, level='beats'):
 
 # # # # # 
 # # # # # Evaluation scripts
@@ -567,6 +553,10 @@ def get_phase_and_period_error(est_rhythm, true_rhythm, level='beats'):
 	# phase_info = np.array((tmp_phase_info, tmp_phase_info / est_period, tmp_phase_info / true_period))
 	return period_info, phase_info
 
+# def get_all_eval_factors(est_rhythm, true_rhythm, level='beats'):
+# 	get_phase_and_period_error(est_rhythm, true_rhythm, level='beats'):
+# 	[f_measure, goto, p_score, information_gain] + list(cemgil) + list(continuity)
+
 # Or should I somehow look at a *histogram* of distances from est-to-true to figure out what's up?
 # NO--- want to look at phase alone, not consider the error in tempo. So to look at phase alone, just want to find out how far from the true beats the estimated ones are.
 
@@ -661,20 +651,27 @@ def typify_errors(beat_offsets, true_period, thresh_rule, thresh):
 	output[np.abs(beat_offsets/denom) < thresh] = 0
 	return output
 
-def plot_all_from_melid(beat, solofilename, scale, thresh_val, thresh_rule):
+def plot_all_from_melid(beat, solofilename, scale, thresh_val, thresh_rule, fig_handle, score_attr=0):
 	song_choices = {beat.transcription_info.filename_solo.loc[melid]:
 					beat.transcription_info.melid.loc[melid] for melid in beat.transcription_info.index}
 	melid = song_choices[solofilename]
 	#	 print thresh_mode_widget.value
-	fig_handle = 'Comparison of beat tracking outputs'
-	plt.figure(fig_handle, figsize = [9,4])
 	plt.gcf().clf()
+	# if score_mode in ['graph']:
+		# This is to plot the evaluation statistic as a graph on the right. But on second thought I don't really like that.
 	gs = gridspec.GridSpec(1, 2, width_ratios=[4, 1])
 	plt.subplot(gs[0])
+	# elif score_mode in ['print']:
+	# 	gs = gridspec.GridSpec(1, 1)
+	# 	plt.subplot(gs[0])
 	beat.ind = melid
 	beat.load_true_beats_and_downbeats()
 	beat.load_estimates()
 	b_scores, db_scores = beat.evaluate_estimates()
+	if scale is 'Downbeat':
+		scores = db_scores
+	else:
+		scores = b_scores
 	error_codes = [-1, 0, 1, 2, 3]
 	# error_names = ['Wrong', 'Perfect', '+Q', 'Half', '-Q']
 	error_colors = ['red', '#00FF00', 'purple', 'green', 'orange']
@@ -707,9 +704,25 @@ def plot_all_from_melid(beat, solofilename, scale, thresh_val, thresh_rule):
 	plt.ylim([-.5, len(extension_types)+.5])
 	plt.yticks(range(len(extension_types)+1), ['true'] + extension_types)
 	plt.title(solofilename)
+	# if score_mode in ['graph']:
 	plt.subplot(gs[1])
-	if scale is 'Downbeat':
-		plt.plot(np.array(db_scores.values()).transpose())
-	else:
-		plt.plot(np.array(b_scores.values()).transpose())
+	# plt.plot(np.array(scores.values()).transpose())
+	# elif score_mode in ['print']:
+	tmp_scores = [np.around(scores[ext_type][score_attr], decimals=3) for ext_type in extension_types]
+	plt.barh(np.arange(1,len(tmp_scores)+1), tmp_scores)
+	plt.ylim([-.5, len(extension_types)+.5])
+	plt.yticks(range(len(extension_types)+1), [''] + extension_types)
+	metric_list = ['f-measure','goto','p-score','info_gain','cemgil_score', 'cemgil_max', 'CMLc', 'CMLt', 'AMLc', 'AMLt', 'median period', 'median phase']
+	plt.title(metric_list[score_attr])
+	# for ext_i, ext_type in enumerate(extension_types):
+	# 	plt.barh()
+	# 	xlim = plt.xlim()
+	# 	tmp_score = np.around(scores[ext_type][score_attr], decimals=3)
+	# 	plt.text(np.max(xlim)*.95, 1+ext_i, str(tmp_score))
 	plt.tight_layout()
+
+
+
+
+
+
