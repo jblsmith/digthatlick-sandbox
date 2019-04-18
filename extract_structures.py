@@ -12,6 +12,7 @@ for data_dir in data_dir_opts:
 solo_structure_folder = data_dir + "/annotations/solo_structure/"
 track_structure_filder = data_dir + "/annotations/track_structure/"
 import tracker
+import importlib.reload as reload
 reload(tracker)
 beat = tracker.Beat()
 

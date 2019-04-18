@@ -1,7 +1,8 @@
+from __future__ import print_function, division
 import dataset
-import essentia
-import essentia.standard
-import essentia.streaming
+# import essentia
+# import essentia.standard
+# import essentia.streaming
 import glob
 import json
 import Levenshtein
@@ -81,9 +82,9 @@ class RhythmData(object):
 		return "<Rhythm period:%s nbeats:%s first:%s>" % (self.period(),len(self.beat_onset), self.first_db())
 
 	def summary(self):
-		print "Median beat period: " + str(self.period())
-		print "Number of beats:	" + str(len(self.beat_onset))
-		print "First downbeat:	 " + str(self.first_db())
+		print("Median beat period: " + str(self.period()))
+		print("Number of beats:	" + str(len(self.beat_onset)))
+		print("First downbeat:	 " + str(self.first_db()))
 	
 	def shift_beats(self, offset):
 		# Obtain an array with the beats shifted forwards or backwards.
@@ -255,7 +256,7 @@ class Beat(object):
 		track_info = self.db[table_field].all()
 		data_list_of_lists = [row for row in track_info]
 		if len(data_list_of_lists)==0:
-			print "Sorry, there is no data in that table."
+			print("Sorry, there is no data in that table.")
 		else:
 			colnames = data_list_of_lists[0].keys()
 			table_as_df = pd.DataFrame(data=data_list_of_lists, columns=colnames)
@@ -298,29 +299,29 @@ class Beat(object):
 		colnames = relevant_beats.keys
 		data_list_of_lists = [row for row in relevant_beats]
 		if len(data_list_of_lists)==0:
-			print "ERROR: There is no such melid!"
+			print("ERROR: There is no such melid!")
 			return
 		table_as_df = pd.DataFrame(data=data_list_of_lists, columns=colnames)
 		self.beats['true'] = RhythmData(beat_onset = table_as_df.onset, beat=table_as_df.beat, bar=table_as_df.bar)
 		# self.beats['true'] = table_as_df[['bar','beat','onset']]
 
 	def load_audio(self, ind=None, abspath=None):
-		print "Loading audio..."
+		print("Loading audio...")
 		if abspath is not None:
 			self.signal, self.fs = librosa.core.load(abspath, sr=self.fs, mono=False)
-			print "Loaded audio."
+			print("Loaded audio.")
 		elif ind is not None:
 			db_entry = self.db['transcription_info'].find_one(melid=ind)
 			if db_entry is not None:
 				audiopath = self.audio_solo_dir + db_entry['filename_solo'] + ".wav"
 				self.signal, self.fs = librosa.core.load(audiopath, sr=self.fs, mono=False)
 			else:
-				print "Sorry, we could not find matching audio for that file index."
+				print("Sorry, we could not find matching audio for that file index.")
 				return
 		self.signal_mono = librosa.to_mono(self.signal)
 		self.S_mono = librosa.core.stft(self.signal_mono, n_fft=self.n_fft, hop_length=self.hop_length)
 		self.V_mono = np.abs(self.S_mono)
-		print "Audio loaded and spectrum precomputed."
+		print("Audio loaded and spectrum precomputed.")
 	
 
 	def load_and_write_structures(self, ind=None, abspath=None):
@@ -333,20 +334,19 @@ class Beat(object):
 	def estimate_beats(self, extractor_type='qm'):
 		assert extractor_type in ['qm','madmom','essentia']
 		if extractor_type == 'qm':
-			print "Extracting beats using QM Vamp plugin..."
+			print("Extracting beats using QM Vamp plugin...")
 			self.raw_data[extractor_type] = vamp.collect(self.signal_mono, self.fs, 'qm-vamp-plugins:qm-barbeattracker')	# Beat and downbeat
 		elif extractor_type == 'essentia':
-			print "Extracting beats using Essentia..."
-			beat_tracker = essentia.standard.BeatTrackerMultiFeature()
-			# ticks, confidence = beat_tracker(audio_ess)
-			ticks, confidence = beat_tracker(self.signal_mono)
-			self.raw_data[extractor_type] = ticks
+			print("Extracting beats using Essentia...")
+			# beat_tracker = essentia.standard.BeatTrackerMultiFeature()
+			# ticks, confidence = beat_tracker(self.signal_mono)
+			# self.raw_data[extractor_type] = ticks
 		elif extractor_type == 'madmom':
-			print "Extracting beats using Madmom..."
+			print("Extracting beats using Madmom...")
 			mm_db_detect_func = madmom.features.beats.RNNDownBeatProcessor()(self.signal_mono)
 			self.raw_data[extractor_type] = madmom.features.beats.DBNDownBeatTrackingProcessor(beats_per_bar=[3,4], fps=100)(mm_db_detect_func)
 		else:
-			print "Unrecognized beat tracker type. Didn't do anything."
+			print("Unrecognized beat tracker type. Didn't do anything.")
 			return
 		self.set_rhythm(extractor_type)
 
@@ -416,7 +416,7 @@ class Beat(object):
 				# self.beats[extractor_type] = tmp_rhythm_data
 				self.beats[extractor_type] = RhythmData(beat_onset=tmp_rhythm_data.onset,bar=tmp_rhythm_data.bar,beat=tmp_rhythm_data.beat)
 			except:
-				print "Failed to load estimates for " + extractor_type
+				print("Failed to load estimates for " + extractor_type)
 
 	def evaluate_estimates(self, thresh_rule='relative', thresh=0.1, scale='Downbeat'):
 		for exttype in self.beats.keys():
@@ -488,7 +488,7 @@ def extract_all_beats(methods=['qm','madmom','essentia'], trackids=None):
 		# trackids = beat.track_info.trackid
 		trackids = beat.solo_info.melid
 	for trackid in trackids:
-		print "Doing " + str(trackid)
+		print("Doing " + str(trackid))
 		try:
 			# Load audio
 			beat.set_index(trackid)
@@ -499,7 +499,7 @@ def extract_all_beats(methods=['qm','madmom','essentia'], trackids=None):
 		except KeyboardInterrupt:
 			raise
 		except:
-			print "Failed for " + str(trackid)
+			print("Failed for " + str(trackid))
 
 def evaluate_all_beats(methods=['qm','madmom','essentia'], trackids=None, level='beats'):
 	beat = Beat()
@@ -510,7 +510,7 @@ def evaluate_all_beats(methods=['qm','madmom','essentia'], trackids=None, level=
 	period_errs = []
 	phase_errs = []
 	for ti,trackid in enumerate(trackids):
-		print "Doing " + str(trackid)
+		print("Doing " + str(trackid))
 		beat.ind = trackid
 		beat.load_true_beats_and_downbeats()
 		beat.load_estimates()
@@ -535,7 +535,7 @@ def get_phase_and_period_error(est_rhythm, true_rhythm, level='beats'):
 		est = est_rhythm.downbeats()
 		true = true_rhythm.downbeats()
 	else:
-		print "Error, invalid level. Choose 'beats' or 'downbeats'."
+		print("Error, invalid level. Choose 'beats' or 'downbeats'.")
 	est = est[est-np.min(true)>-1]
 	est = est[est-np.max(true)<1]
 	est_period = np.median(np.diff(est))
@@ -576,7 +576,7 @@ def fetch_feat(beat, trackid=None, melid=None, feature='chroma'):
 		track_string = '_solo/' + list(beat.transcription_info.loc[beat.transcription_info.melid==melid].filename_solo)[0]
 	track_path = feat_path + track_string + feat_suffix
 	if not os.path.exists(track_path):
-		print "File not found: " + track_path
+		print("File not found: " + track_path)
 		return None, None
 	# Use pandas instead of csv reader? Or leave like this?
 	with open(track_path, 'rb') as f:
@@ -655,7 +655,7 @@ def plot_all_from_melid(beat, solofilename, scale, thresh_val, thresh_rule, fig_
 	song_choices = {beat.transcription_info.filename_solo.loc[melid]:
 					beat.transcription_info.melid.loc[melid] for melid in beat.transcription_info.index}
 	melid = song_choices[solofilename]
-	#	 print thresh_mode_widget.value
+	#	 print(thresh_mode_widget.value
 	plt.gcf().clf()
 	# if score_mode in ['graph']:
 		# This is to plot the evaluation statistic as a graph on the right. But on second thought I don't really like that.
