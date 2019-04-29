@@ -57,7 +57,182 @@ def parse_annotation(ind):
 	# all_onsets = list(itertools.chain.from_iterable(all_onsets))
 	return ann_json, part_names, part_types, part_forms, part_onsets, all_onsets
 
+def decode_transition_matrix(tm):
+	best_next_steps = np.zeros((tm.shape[0],2))
+	best_next_steps[-1,:] = [0, tm[-1,-1]]
+	best_next_steps[-2,:] = [tm.shape[0]-1, tm[-2,-1]]
+	for ti in range(tm.shape[0]-3, -1, -1):
+		tj_opts = np.where(tm[ti,:]>0)[0]
+		tj_costs = best_next_steps[tj_opts,1] + tm[ti,tj_opts]
+		choice = np.argmin(tj_costs)
+		best_next_steps[ti,0] = tj_opts[choice]
+		best_next_steps[ti,1] = tj_costs[choice]
+	# Now, backtrace from start!
+	path = [int(best_next_steps[0,0])]
+	while (tm.shape[0]-1) not in path:
+		path += [int(best_next_steps[path[-1],0])]
+		# If we get caught in a loop somehow, this assertion should catch it.
+		assert len(path) == len(np.unique(path))
+	return best_next_steps, path
 
+# This is maybe a silly idea, but it's a transition matrix where steps on different planes are permitted.
+# We solve it just by taking the min across different planes, and including the argmin when we backtrace.
+def decode_3d_transition_matrix(tm):
+	tm_min_costs = np.min(tm,axis=0)
+	tm_arc_choices = np.argmin(tm,axis=0)
+	best_next_steps, path = decode_transition_matrix(tm_min_costs)
+	path = [0] + path
+	path_z = [tm_arc_choices[i,j] for (i,j) in zip(path[:-1],path[1:])]
+	return best_next_steps, np.array((path[1:], path_z)).transpose()
+
+def richer_agg(feat, inds, aggfuncs):
+	feat_versions = [librosa.util.sync(feat, inds, aggregate=aggfunc, pad=True, axis=-1) for aggfunc in aggfuncs]
+	feat_out = np.concatenate(feat_versions,axis=0)
+	return feat_out
+
+
+def convert_to_percentile(mat):
+	# Create a new matrix where mat[i,j] = ordinal_rank[mat[i,j]] within values of mat
+	# BUT, also want to remove all zero entries from consideration. And then we want to normalize, so values range from 0 to 1.
+	assert np.min(mat)>=0
+	# mat = sp.random.rand(4,4)
+	# mat = np.triu(mat,1)
+	arr_row = np.reshape(mat,(np.prod(mat.shape)))
+	arr_ord = np.argsort(arr_row,axis=0)
+	# arr_ord contains the sort order of the original elements.
+	# Next: force relevant N items into range [1/N, 1]
+	first_non_zero = np.where(arr_row[arr_ord]>0)[0][0]
+	ord_vals = np.zeros_like(arr_ord).astype(float)
+	ord_vals[first_non_zero:] = np.linspace(0,1,len(arr_ord)-first_non_zero+1)[1:]
+	new_row = arr_row*0
+	new_row[arr_ord] = ord_vals
+	# Just to convince ourselves that this is how to reshape the vector into the matrix:
+	assert np.all(mat == np.reshape(arr_row,mat.shape))
+	mat_ord = np.reshape(new_row, mat.shape)
+	return mat_ord
+
+
+def feat_to_tm(ind):
+jaah_info = pd.read_csv("audio_paths_index.csv")
+ind = 14
+audio_path = jaah_info.audio_path[ind]
+audio, sr = librosa.load(audio_path, sr=22050, mono=True)
+cqt = librosa.core.cqt(audio)
+mfcc = librosa.feature.mfcc(audio)
+rhyt = librosa.feature.rhythm.tempogram(audio)
+tempo, beat_inds = librosa.beat.beat_track(audio,sr=sr)
+
+b_cqt = richer_agg(np.real(np.abs(cqt)), beat_inds, [np.mean, np.max, np.std]).transpose()
+b_mfc = richer_agg(np.real(mfcc), beat_inds, [np.mean, np.max, np.std]).transpose()
+test_len = 25
+ssm1 = sp.spatial.distance.cdist(b_cqt[:test_len], b_cqt[:test_len], metric='cosine')
+ssm2 = sp.spatial.distance.cdist(b_mfc[:test_len], b_mfc[:test_len], metric='cosine')
+ssms = [convert_to_percentile(mat) for mat in [ssm1, ssm2]]
+
+dist_base_mat = np.zeros_like(ssms[0])
+for i in range(dist_base_mat.shape[0]):
+	dist_base_mat[i,i:] = np.arange(dist_base_mat.shape[0]-i)
+
+min_step = 2
+max_step = 5
+ssm3d = np.stack([np.tril(np.triu(ssm + dist_base_mat,min_step),max_step) for ssm in ssms])
+info, path3d = decode_3d_transition_matrix(ssm3d)
+vertices = [0] + list(path3d[:,0])
+edges = path3d[:-1,1]
+plt.clf()
+plt.subplot(1,2,1)
+# plt.imshow(ssm3d[0])
+plt.imshow(ssms[0])
+plt.subplot(1,2,2)
+# plt.imshow(ssm3d[1])
+plt.imshow(ssms[1])
+for i in range(len(edges)):
+	plt.subplot(1,2,edges[i]+1)
+	plt.plot([vertices[i+1],vertices[i+1]],[vertices[i],vertices[i]],'o-', color='white')
+
+plt.savefig("tmp.pdf")
+
+tm = np.zeros_like(ssm) + ssm
+# tm *= dist_base_mat
+tm += dist_base_mat
+tm = np.tril(np.triu(tm,min_step),max_step)
+model, path = decode_transition_matrix(tm)
+path = [0] + path
+plt.clf()
+plt.imshow(ssm)
+plt.plot(path[1:],path[:-1],'o-', color='black')
+plt.savefig("tmp.pdf")
+
+# Just use cqt for now.
+# Set up transition matrix:
+tm_size = 15
+tm = np.ones([tm_size,tm_size])
+# Basic contraints:
+# from i, must transition to some future step between min and max steps away
+min_step = 1
+max_step = 4
+tm = tm * np.tril(np.triu(np.ones_like(tm), min_step),max_step)
+# normalize rows
+# tm = (tm / np.tile(np.sum(tm,axis=1),(tm_size,1)).transpose())
+
+# Find min cost from 0 to 14 with only steps allowed that have non-zero costs.
+# Initial case: t=14
+
+best_path_from = {i:{'step':0,'cost':np.inf} for i in range(tm_size)}
+best_path_from[tm_size-1]['step'] = 0
+best_path_from[tm_size-1]['cost'] = tm[tm_size-1,tm_size-1]
+best_path_from[tm_size-2]['step'] = tm_size-1
+best_path_from[tm_size-2]['cost'] = tm[tm_size-2,tm_size-1]
+for ti in range(12,-1,-1):
+	# for ti in range(13,0,-1):
+	tj_opts = np.where(tm[ti,:]>0)[0]
+	tj_options = [(tj,best_path_from[tj]['cost'] + tm[ti,tj]) for tj in tj_opts]
+	tj_steps, tj_costs = zip(*tj_options)
+	# These are the next step and the cost of the total path using that step, respectively, for all future options.
+	choice = np.argmin(tj_costs)
+	best_path_from[ti]['step'] = tj_steps[choice]
+	best_path_from[ti]['cost'] = tj_costs[choice] #best_path_from[tj_steps[choice]]['cost'] + tj_costs[choice]
+
+# Now, backtrace from start!
+path = []
+i = 0
+cost = best_path_from[i]['cost']
+next_step = best_path_from[i]['step']
+while next_step>0:
+	path += [next_step]
+	next_step = best_path_from[next_step]['step']
+
+
+
+	
+	np.argmin(tj_opt_costs.values())
+	cost_opts = {tj:}
+	what are path options from ti onwards?
+	for tj in path_options:
+		cost_opts += [cost_ti_tj + cost_from_tj]
+	keep the best cost_opt as being on the best_path_from[ti]
+	for tj in range(14,ti,-1)
+		
+		
+
+# What is the best path starting from ti?
+for ti in range(13,0,-1):
+	# Consider the future vertex tj:
+	for tj in range(ti,14):
+		cost_ti_tj = tm[ti,tj]
+		cost_tj_end = best_path_from[tj]['cost']
+		cost_ti_end
+		
+		# WhIs the path from ti-to-tj + the path from tj-end better than the path from ti-end?
+		
+
+
+sp = np.ones_like(tm)
+librosa.sequence.viterbi(sp, tm)
+librosa.sequence.transition_local(n_states=10,width=3)
+
+tm = tm / np.tile(np.sum(tm,axis=1), (tm.shape[1],))
+librosa.sequence.viterbi(prob=np.ones_like(tm), transition=tm)
 
 
 all_names = []
