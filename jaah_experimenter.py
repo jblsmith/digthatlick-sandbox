@@ -57,12 +57,30 @@ def parse_annotation(ind):
 	# all_onsets = list(itertools.chain.from_iterable(all_onsets))
 	return ann_json, part_names, part_types, part_forms, part_onsets, all_onsets
 
+def get_basic_feats(ind):
+	jaah_info = pd.read_csv("audio_paths_index.csv")
+	audio_path = jaah_info.audio_path[ind]
+	audio, sr = librosa.load(audio_path, sr=22050, mono=True)
+	cqt = librosa.core.cqt(audio)
+	mfcc = librosa.feature.mfcc(audio)
+	rhyt = librosa.feature.rhythm.tempogram(audio)
+	tempo, beat_inds = librosa.beat.beat_track(audio,sr=sr)
+	return cqt, mfcc, rhyt, tempo, beat_inds, audio, sr
+
+# The input is a transition matrix where TM[i,j] indicates the probability of stepping from points i to j (or some value correlated to the probability).
+# Enforcements:
+# 	- must be upper triangular, with everything on or below the main diagonal equal to -inf, because these transitions are impossible.
 def decode_transition_matrix(tm):
+	inf_mask = np.tril(np.ones_like(tm))
+	inf_mask[inf_mask==1] = -np.inf
+	assert np.all(np.tril(tm)==inf_mask)
+	# best_next_steps[i,:] = [best_next_index, unit_cost_of_leaping_to_that_index]
 	best_next_steps = np.zeros((tm.shape[0],2))
-	best_next_steps[-1,:] = [0, tm[-1,-1]]
-	best_next_steps[-2,:] = [tm.shape[0]-1, tm[-2,-1]]
+	best_next_steps[-1,:] = [0, 0]						# From END, leap to beginning at cost 0
+	best_next_steps[-2,:] = [tm.shape[0]-1, tm[-2,-1]]	# From END-1, leap to END at cost defined by TM
 	for ti in range(tm.shape[0]-3, -1, -1):
-		tj_opts = np.where(tm[ti,:]>0)[0]
+		# for ti in range(tm.shape[0]-3, tm.shape[0]-6, -1):
+		tj_opts = np.where(~np.isinf(tm[ti,:]))[0]
 		tj_costs = best_next_steps[tj_opts,1] + tm[ti,tj_opts]
 		choice = np.argmin(tj_costs)
 		best_next_steps[ti,0] = tj_opts[choice]
@@ -73,7 +91,26 @@ def decode_transition_matrix(tm):
 		path += [int(best_next_steps[path[-1],0])]
 		# If we get caught in a loop somehow, this assertion should catch it.
 		assert len(path) == len(np.unique(path))
-	return best_next_steps, path
+	return best_next_steps, [0] + path
+
+# Original script for this... but did I think through all the edge cases? Rewriting above to assert more properties of the transition matrix.
+# def decode_transition_matrix(tm):
+# 	best_next_steps = np.zeros((tm.shape[0],2))
+# 	best_next_steps[-1,:] = [0, tm[-1,-1]]
+# 	best_next_steps[-2,:] = [tm.shape[0]-1, tm[-2,-1]]
+# 	for ti in range(tm.shape[0]-3, -1, -1):
+# 		tj_opts = np.where(tm[ti,:]>0)[0]
+# 		tj_costs = best_next_steps[tj_opts,1] + tm[ti,tj_opts]
+# 		choice = np.argmin(tj_costs)
+# 		best_next_steps[ti,0] = tj_opts[choice]
+# 		best_next_steps[ti,1] = tj_costs[choice]
+# 	# Now, backtrace from start!
+# 	path = [int(best_next_steps[0,0])]
+# 	while (tm.shape[0]-1) not in path:
+# 		path += [int(best_next_steps[path[-1],0])]
+# 		# If we get caught in a loop somehow, this assertion should catch it.
+# 		assert len(path) == len(np.unique(path))
+# 	return best_next_steps, path
 
 # This is maybe a silly idea, but it's a transition matrix where steps on different planes are permitted.
 # We solve it just by taking the min across different planes, and including the argmin when we backtrace.
@@ -89,7 +126,6 @@ def richer_agg(feat, inds, aggfuncs):
 	feat_versions = [librosa.util.sync(feat, inds, aggregate=aggfunc, pad=True, axis=-1) for aggfunc in aggfuncs]
 	feat_out = np.concatenate(feat_versions,axis=0)
 	return feat_out
-
 
 def convert_to_percentile(mat):
 	# Create a new matrix where mat[i,j] = ordinal_rank[mat[i,j]] within values of mat
@@ -111,23 +147,303 @@ def convert_to_percentile(mat):
 	mat_ord = np.reshape(new_row, mat.shape)
 	return mat_ord
 
+def compute_gaussian_krnl(M):
+	from scipy import signal
+	"""Creates a gaussian kernel following Foote's paper."""
+	g = signal.gaussian(M, M // 3., sym=True)
+	G = np.dot(g.reshape(-1, 1), g.reshape(1, -1))
+	G[M // 2:, :M // 2] = -G[M // 2:, :M // 2]
+	G[:M // 2, M // 2:] = -G[:M // 2, M // 2:]
+	return G
 
-def feat_to_tm(ind):
-jaah_info = pd.read_csv("audio_paths_index.csv")
-ind = 14
-audio_path = jaah_info.audio_path[ind]
-audio, sr = librosa.load(audio_path, sr=22050, mono=True)
-cqt = librosa.core.cqt(audio)
-mfcc = librosa.feature.mfcc(audio)
-rhyt = librosa.feature.rhythm.tempogram(audio)
-tempo, beat_inds = librosa.beat.beat_track(audio,sr=sr)
+def base_cost_matrix(mat):
+	## Base cost
+	#  There is a base cost to traversing a length L: it's L. That's the ensure that every leap is technically allowed.
+	#  Thereafter, the real "costs" will be negative values added to this basis.
+	assert mat.shape[0] == mat.shape[1]
+	length = mat.shape[0]
+	base_cost = np.zeros_like(mat)
+	for i in range(length):
+		for j in range(i+1,length):
+			base_cost[i,j] = j-i
+	base_cost[base_cost==0] = -np.inf
+	return base_cost
 
-b_cqt = richer_agg(np.real(np.abs(cqt)), beat_inds, [np.mean, np.max, np.std]).transpose()
+def block_novelty_matrix(mat, gaussness=0.5):
+	## Block novelty reward
+	#  Looks at novelty of [i,i+d] with respect to [i-d,i]
+	#  Scales the region using a checkerboard kernel that is gaussian (1) or not (0) or half-gaussian, half-flat (0.5, default)
+	assert 0 <= gaussness <= 1
+	assert mat.shape[0] == mat.shape[1]
+	length = mat.shape[0]
+	cost_mat = np.zeros_like(mat) - np.inf
+	for i in range(length-1):
+		for j in range(i+1,length):
+			delta = j-i
+			# Local novelty cost:
+			if (i-delta>=0) & (delta>=1):
+				checkerboard = mat[i-delta:j,i-delta:j]
+				check_kernel_gauss = compute_gaussian_krnl(delta*2)
+				check_kernel_flat = np.block([[np.ones((delta,delta)), -np.ones((delta,delta))], [-np.ones((delta,delta)), np.ones((delta,delta))]])
+				check_kernel = gaussness*check_kernel_gauss + (1-gaussness)+check_kernel_flat
+				cost_mat[i,j] = np.mean(check_kernel * checkerboard)
+	return cost_mat
+
+def block_repetition_matrix(mat):
+	## Block repetition reward
+	#  Looks at stripes [k,k+d] for k in [0, 1, ..., i-d].
+	#  The minimum cost of these stripes is the cost of the arc, and we also record the k to know where the repetition started.
+	assert mat.shape[0] == mat.shape[1]
+	length = mat.shape[0]
+	cost_mat_blockrep = np.zeros_like(mat) - np.inf
+	cost_mat_pre_start = np.zeros_like(mat) - np.inf
+	for i in range(length-1):
+		for j in range(i+1,length):
+			delta = j-i
+			if (i-delta>0) & (delta>=1):
+				main_block = mat[i:j,i:j]
+				pre_rep_options = [mat[k:k+delta, i:j] for k in range(0,i-delta+1)]
+				pre_rep_opt_costs = [np.mean(tmp_mat) for tmp_mat in pre_rep_options]
+				# rep_weight = np.max(pre_rep_opt_costs) - np.min(pre_rep_opt_costs)
+				rep_weight = 1.0
+				cost_mat_blockrep[i,j] = -np.min(pre_rep_opt_costs) * rep_weight
+				cost_mat_pre_start[i,j] = np.argmin(pre_rep_opt_costs)
+	return cost_mat_blockrep, cost_mat_pre_start
+
+def plot_slices(mat3d, fig=None, filename=None):
+	plt.clf
+	n = mat3d.shape[2]
+	y = int(np.round(np.sqrt(n)))
+	x = int(np.ceil(n/y))
+	if fig is not None:
+		plt.figure(fig)
+	for i in range(n):
+		plt.subplot(y,x,i+1)
+		plt.imshow(mat3d[:,:,i])
+	if filename is None:
+		plt.savefig("tmp.pdf")
+	else:
+		plt.savefig(filename)
+
+def setup_toy_cm(xsize=16, repgroups = [ (4,[2,6,12]) ], blockgroups=[ (2,[0,10]), (2,[2,6,12]) ]):
+	mat = np.ones((xsize,xsize))
+	mat -= np.eye(xsize)
+	if repgroups is not None:
+		assert [xsize > grpinfo[0] + np.max(grpinfo[1]) for grpinfo in repgroups]
+		for grpinfo in repgroups:
+			grp_len, grp_starts = grpinfo
+			for i,j in itertools.combinations(grp_starts,2):
+				mat[np.arange(grp_len)+i,np.arange(grp_len)+j] = 0
+	if blockgroups is not None:
+		assert [xsize > grpinfo[0] + np.max(grpinfo[1]) for grpinfo in blockgroups]
+		for grpinfo in blockgroups:
+			grp_len, grp_starts = grpinfo
+			for i,j in itertools.combinations_with_replacement(grp_starts,2):
+				mat[i:i+grp_len,j:j+grp_len] = 0
+	mat = np.min((mat,mat.transpose()),axis=0)
+	return mat
+
+def cqt_to_chroma_bass_treble(cqt, split=40):
+	bass_cqt = cqt[:split,:].copy()
+	treb_cqt = cqt[split:,:].copy()
+	chroma = np.zeros((12,cqt.shape[1]))
+	for i in range(int(cqt.shape[0]/12)):
+		chroma += np.abs(cqt[i*12:(i+1)*12,:])
+	return chroma/12, bass_cqt, treb_cqt
+
+def test_cost_functions():
+mat = setup_toy_cm(10,None,[(2,[0,4]), (2,[2,8])])
+# That should have form ABACB, each 2 time units long.
+cost_base = base_cost_matrix(mat)
+cost_bnov = block_novelty_matrix(mat, gaussness=0.5)
+cost_bnov_orig = cost_bnov.copy()
+cost_bnov[np.isinf(cost_bnov)] = np.max(cost_base)
+cost_bnov += np.tril(cost_base)
+info, path = decode_transition_matrix(cost_base + cost_bnov)
+plt.clf(),plot_slices(np.stack((mat, cost_bnov_orig, cost_base, cost_base + cost_bnov),axis=2))
+cost_bnov[0,2]
+
+
+mat = setup_toy_cm(8,[(4,[0,4])], None)
+
+mat = setup_toy_cm(34,
+	repgroups = [(4,[2, 6, 18, 22])],
+	blockgroups = [(2,[0,10]), (4,[14,28])])
+
+cost_base = base_cost_matrix(mat)
+cost_bnov = block_novelty_matrix(mat, gaussness=0.5)
+cost_bseq, starts_bseq = block_repetition_matrix(mat)
+cost_bnov[np.isinf(cost_bnov)] = 0
+cost_bseq[np.isinf(cost_bseq)] = 0
+plot_slices(np.stack((mat, cost_bnov, cost_bseq, cost_base+cost_bnov+cost_bseq),axis=2))
+
+
+info, path = decode_transition_matrix(cost_base + cost_bnov)
+
+
+plt.clf()
+plt.imshow(cm)
+plt.savefig("tmp.pdf")
+
+
+np.max((cost_base, cost_bnov),axis=0)
+
+
+cqt, mfcc, rhyt, tempo, beat_inds, audio, sr = get_basic_feats(5)
+chroma, bcqt, tcqt = cqt_to_chroma_bass_treble(cqt)
+b_ccqt = richer_agg(np.real(np.abs(chroma)), beat_inds, [np.mean, np.max, np.std]).transpose()
+b_bcqt = richer_agg(np.real(np.abs(bcqt)), beat_inds, [np.mean, np.max, np.std]).transpose()
+b_tcqt = richer_agg(np.real(np.abs(tcqt)), beat_inds, [np.mean, np.max, np.std]).transpose()
 b_mfc = richer_agg(np.real(mfcc), beat_inds, [np.mean, np.max, np.std]).transpose()
-test_len = 25
-ssm1 = sp.spatial.distance.cdist(b_cqt[:test_len], b_cqt[:test_len], metric='cosine')
-ssm2 = sp.spatial.distance.cdist(b_mfc[:test_len], b_mfc[:test_len], metric='cosine')
-ssms = [convert_to_percentile(mat) for mat in [ssm1, ssm2]]
+b_rhy = richer_agg(np.real(rhyt), beat_inds, [np.mean, np.max, np.std]).transpose()
+test_len = 30
+
+# ssm1 = sp.spatial.distance.cdist(b_cqt[:test_len], b_cqt[:test_len], metric='cosine')
+# ssm2 = sp.spatial.distance.cdist(b_mfc[:test_len], b_mfc[:test_len], metric='cosine')
+# ssm3 = sp.spatial.distance.cdist(b_rhy[:test_len], b_rhy[:test_len], metric='cosine')
+# ssms = np.array([convert_to_percentile(mat) for mat in [ssm1, ssm2, ssm3]]).transpose((1,2,0))
+ssms = [sp.spatial.distance.cdist(b_mat[:test_len], b_mat[:test_len], metric='cosine') for b_mat in [b_ccqt, b_bcqt, b_tcqt, b_mfc, b_rhy, ]]
+plot_slices(np.array(ssms).transpose((1,2,0)),1,"ssms-reg.pdf")
+ssms = np.array([convert_to_percentile(mat) for mat in ssms]).transpose((1,2,0))
+plot_slices(ssms,1,"ssms-perc.pdf")
+
+# Compute cost matrices
+mat = ssms[:,:,0].copy()
+cost_base = base_cost_matrix(mat)
+cost_bnov = block_novelty_matrix(mat, gaussness=0.5)
+cost_bseq, starts_bseq = block_repetition_matrix(mat)
+plot_slices(np.stack((cost_base, cost_bnov, cost_bseq),axis=2))
+
+# Decode transitions by weighting two matrices
+cm = cost_base.copy() + 1
+cm[~np.isinf(cost_bnov)] += 12*cost_bnov[~np.isinf(cost_bnov)]
+info, path = decode_transition_matrix(cm)
+justifications = [starts_bseq[i,j] for [i,j] in zip(path[:-1],path[1:])]
+for x in zip(path[:-1],path[1:], justifications):
+	print(x)
+
+def make_stripe_cost_matrix(mat):
+	# The output should have pixel (i,j) represent the minimum stripe similarity to some previous segment of length j-i.
+	# First, we make a matrix showing the average value of all diagonal stripes.
+mat = ssm1.copy()
+mat = np.ones((15,15))
+mat -= np.eye(15)
+mat[range(4),range(4,8)] = 0
+mat[range(4),range(11,15)] = 0
+mat[range(4,8),range(11,15)] = 0
+biz_mat = np.fliplr(np.transpose(np.fliplr(mat)))
+biz_mattm = librosa.segment.recurrence_to_lag((np.triu(biz_mat)), pad=False, axis=0)
+mattm = np.fliplr(np.transpose(np.fliplr(biz_mattm)))
+plt.imshow(mattm)
+plt.savefig("tmp2.pdf")
+
+# block costs
+
+# This tells us how to leap from i to j when (j-i)>=0. But what about the first leap? We cannot make the step (0,4) in this scheme.
+# So, we must set up a set of initial options.
+# Or, we could just allow i:i+1 to always be allowed, with some steep cost equal to the length spanned. The length spanned can be our maximum cost for each span.
+
+
+
+# Block costs
+# new_block[t,l] = how well mat[t:t+l] stands out against background
+# rep_block[t,l] = how well mat[t:t+l] indicates some previous repetition at k, or mat[k:k+l]
+mat = ssm1.copy()
+length = mat.shape[0]
+block_sizes = [1,2,4,8]
+rep_block = np.zeros((length,length,len(block_sizes)))
+for k,bs in enumerate(block_sizes):
+	for i in range(bs,length-1):
+		for j in range(i,length):
+			rep_block[i,j,k] = np.mean(mat[i:i+bs,j:j+bs])
+
+for k,bs in enumerate(block_sizes):
+	plt.subplot(2,2,k+1)
+	plt.imshow(rep_block[:,:,k])
+
+plt.savefig("tmp.pdf")
+
+for i in range(length):
+	for j in range(i,length):
+		
+for t in range(length):
+	for l in range(length-t): #since the time lag cannot exceed the remaining length of the song
+		rep_block[t,l] = mat[t:t+l,t:t+l]
+		
+	
+
+
+
+new_block[i,j] = how well mat[i:j,i:j] stands out against background
+background could be [i-j:i], or something else?
+first, get a matrix where newmat[i,j] shows the average of the block
+then, block operations should be simple (although there cannot be a kernel on top of it)
+
+rep_block[i,j] = how well mat[i:j,i:j] indicates some previous repetition
+there should be with this the index k where mat[k,k+j-i] is most similar to mat[i,j]
+
+
+
+# Pseudo equation:
+length = mat.shape[0]
+inf_mask = np.tril(np.ones_like(mat))
+inf_mask[inf_mask==1] = np.inf
+mat_with_shifts = np.zeros([length,length,length]) + np.inf
+mat_with_shifts[:,:,0] = mat + inf_mask
+for i in range(1,length):
+	# matrix = previous answer, shifted, diagonally down and right, plus original snippet.
+	# Both parts scaled so that each copy from 1 to N is weighted equally.
+	# mat_with_shifts[i:,i:,i] = (mat_with_shifts[i:,i:,i-1]*i + mat[:-i,:-i]) / (i+1)
+	mat_with_shifts[:-i,:-i,i] = (mat_with_shifts[:-i,:-i,i-1]*i + mat[i:,i:]) / (i+1)
+	mat_with_shifts[:,:,i] += inf_mask
+	# mat_with_shifts[i:,i:,i] 
+
+plt.subplot(2,2,1)
+plt.imshow(mat_with_shifts[:,:,0])
+plt.subplot(2,2,2)
+plt.imshow(mat_with_shifts[:,:,1])
+plt.subplot(2,2,3)
+plt.imshow(mat_with_shifts[:,:,3])
+plt.subplot(2,2,4)
+plt.imshow(mat_with_shifts[:,:,4])
+plt.savefig("tmp.pdf")
+
+rep_cost[i,j] = np.min (and argmin) [length (j-i) diagonal stripes starting after 0 and before i]
+rep_cost = np.zeros_like(mat)
+for i in range(mat.shape[0]):
+	for j in range(mat.shape[0]):
+		length = j-i
+		if length > i
+
+
+mat = librosa.segment.recurrence_to_lag(mat, pad=False, axis=0)
+# Now, the repetitions (NW-SE diagonals) are in the columns (N-S)
+new_mat = np.triu(np.ones_like(mat))
+for i in range(new_mat.shape[0]):
+	new_mat[i,i*2<np.arange(new_mat.shape[0])] = 0
+
+
+new_mat[i,j] = 0 if i*2<j
+for i in range(mat.shape[0]):
+	for j in range(i,mat.shape[0]):
+		new_mat[i,j] = 
+plt.clf()
+plt.imshow(mat)
+plt.savefig("tmp.pdf")
+
+
+	# This will be the average of the diagonal stripe
+
+
+# Need to formalize this part.
+# Also to-do: turn SSM into a transition matrix expressing block or segment costs.
+# Want TM[i,j] to express block cost of calling [i,j] a block (must be compared to [i-j,i]?)
+# Want TM[i,j] to express stripe cost of calling [i,j] a repeated sequence
+# Want these to also express cost of calling them a NEW thing vs. an OLD thing?
+
+
+
+
 
 dist_base_mat = np.zeros_like(ssms[0])
 for i in range(dist_base_mat.shape[0]):
