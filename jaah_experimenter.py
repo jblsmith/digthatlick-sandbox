@@ -161,8 +161,8 @@ def base_cost_matrix(mat):
 	#  There is a base cost to traversing a length L: it's L. That's the ensure that every leap is technically allowed.
 	#  Thereafter, the real "costs" will be negative values added to this basis.
 	assert mat.shape[0] == mat.shape[1]
-	length = mat.shape[0]
-	base_cost = np.zeros_like(mat)
+	length = mat.shape[0]+1
+	base_cost = np.zeros((length,length))
 	for i in range(length):
 		for j in range(i+1,length):
 			base_cost[i,j] = j-i
@@ -175,8 +175,8 @@ def block_novelty_matrix(mat, gaussness=0.5):
 	#  Scales the region using a checkerboard kernel that is gaussian (1) or not (0) or half-gaussian, half-flat (0.5, default)
 	assert 0 <= gaussness <= 1
 	assert mat.shape[0] == mat.shape[1]
-	length = mat.shape[0]
-	cost_mat = np.zeros_like(mat) - np.inf
+	length = mat.shape[0]+1
+	cost_mat = np.zeros((length,length)) - np.inf
 	for i in range(length-1):
 		for j in range(i+1,length):
 			delta = j-i
@@ -189,26 +189,71 @@ def block_novelty_matrix(mat, gaussness=0.5):
 				cost_mat[i,j] = np.mean(check_kernel * checkerboard)
 	return cost_mat
 
-def block_repetition_matrix(mat):
+def block_repetition_matrix(mat, map_to_range=True):
 	## Block repetition reward
-	#  Looks at stripes [k,k+d] for k in [0, 1, ..., i-d].
+	#  Looks at blocks [k,k+d] for k in [0, 1, ..., i-d].
+	#  TODO: should I be ignoring the diagonals of these blocks? Same with novelty matrix blocks above.
 	#  The minimum cost of these stripes is the cost of the arc, and we also record the k to know where the repetition started.
 	assert mat.shape[0] == mat.shape[1]
-	length = mat.shape[0]
-	cost_mat_blockrep = np.zeros_like(mat) - np.inf
-	cost_mat_pre_start = np.zeros_like(mat) - np.inf
+	length = mat.shape[0]+1
+	cost_mat_blockrep = np.zeros((length,length)) - np.inf
+	cost_mat_pre_start = np.zeros((length,length)) - np.inf
 	for i in range(length-1):
 		for j in range(i+1,length):
 			delta = j-i
-			if (i-delta>0) & (delta>=1):
+			if (i-delta>=0) & (delta>=1):
 				main_block = mat[i:j,i:j]
 				pre_rep_options = [mat[k:k+delta, i:j] for k in range(0,i-delta+1)]
 				pre_rep_opt_costs = [np.mean(tmp_mat) for tmp_mat in pre_rep_options]
 				# rep_weight = np.max(pre_rep_opt_costs) - np.min(pre_rep_opt_costs)
 				rep_weight = 1.0
-				cost_mat_blockrep[i,j] = -np.min(pre_rep_opt_costs) * rep_weight
+				cost_mat_blockrep[i,j] = np.min(pre_rep_opt_costs) * rep_weight
 				cost_mat_pre_start[i,j] = np.argmin(pre_rep_opt_costs)
+	if map_to_range:
+		minval = np.min(cost_mat_blockrep[~np.isinf(cost_mat_blockrep)])
+		maxval = np.max(cost_mat_blockrep[~np.isinf(cost_mat_blockrep)])
+		rangeval = maxval - minval
+		assert maxval > 0
+		assert rangeval > 0
+		cost_mat_blockrep = cost_mat_blockrep - maxval
+		cost_mat_blockrep = cost_mat_blockrep / rangeval
+		assert np.all(cost_mat_blockrep[~np.isinf(cost_mat_blockrep)]<=0)
 	return cost_mat_blockrep, cost_mat_pre_start
+
+# TODO: how will I scale these cost matrices?
+# - scaling with respect to each other
+# - scaling the values within them
+
+def stripe_repetition_matrix(mat, map_to_range=True):
+	## Stripe repetition reward
+	#  Looks at stripes [k,k+d] for k in [0, 1, ..., i-d].
+	#  The minimum cost of these stripes is the cost of the arc, and we also record the k to know where the repetition started.
+	assert mat.shape[0] == mat.shape[1]
+	length = mat.shape[0]+1
+	cost_mat_blockrep = np.zeros((length,length)) - np.inf
+	cost_mat_pre_start = np.zeros((length,length)) - np.inf
+	for i in range(length-1):
+		for j in range(i+1,length):
+			delta = j-i
+			if (i-delta>=0) & (delta>=1):
+				main_block = mat[range(i,j),range(i,j)]
+				pre_rep_options = [mat[range(k,k+delta), range(i,j)] for k in range(0,i-delta+1)]
+				pre_rep_opt_costs = [np.mean(tmp_mat) for tmp_mat in pre_rep_options]
+				# rep_weight = np.max(pre_rep_opt_costs) - np.min(pre_rep_opt_costs)
+				rep_weight = 1.0
+				cost_mat_blockrep[i,j] = np.min(pre_rep_opt_costs) * rep_weight
+				cost_mat_pre_start[i,j] = np.argmin(pre_rep_opt_costs)
+	if map_to_range:
+		minval = np.min(cost_mat_blockrep[~np.isinf(cost_mat_blockrep)])
+		maxval = np.max(cost_mat_blockrep[~np.isinf(cost_mat_blockrep)])
+		rangeval = maxval - minval
+		assert maxval > 0
+		assert rangeval > 0
+		cost_mat_blockrep = cost_mat_blockrep - maxval
+		cost_mat_blockrep = cost_mat_blockrep / rangeval
+		assert np.all(cost_mat_blockrep[~np.isinf(cost_mat_blockrep)]<=0)
+	return cost_mat_blockrep, cost_mat_pre_start
+
 
 def plot_slices(mat3d, fig=None, filename=None):
 	plt.clf
@@ -252,17 +297,50 @@ def cqt_to_chroma_bass_treble(cqt, split=40):
 	return chroma/12, bass_cqt, treb_cqt
 
 def test_cost_functions():
+mat = setup_toy_cm(6,[(2,[0,4])],None)
+mat_pad = np.block([[mat, np.zeros((mat.shape[0],1))], [np.zeros((1,mat.shape[0])), 0]])
+cost_base = base_cost_matrix(mat)
+cost_bnov = block_novelty_matrix(mat, gaussness=0.5)
+cost_brep, brep_starts = block_repetition_matrix(mat)
+cost_srep, srep_starts = stripe_repetition_matrix(mat)
+plt.clf(),plot_slices(np.stack((mat_pad, cost_base, cost_bnov, cost_brep, cost_srep),axis=2))
+
+decode_transition_matrix(cost_base)[1]
+decode_transition_matrix(cost_bnov)[1]
+decode_transition_matrix(cost_base)[1]
+
+
+
 mat = setup_toy_cm(10,None,[(2,[0,4]), (2,[2,8])])
+mat_pad = np.block([[mat, np.zeros((mat.shape[0],1))], [np.zeros((1,mat.shape[0])), 0]])
 # That should have form ABACB, each 2 time units long.
 cost_base = base_cost_matrix(mat)
 cost_bnov = block_novelty_matrix(mat, gaussness=0.5)
+cost_brep, brep_starts = block_repetition_matrix(mat)
+# The final cost matrix should have:
+# - where cost_bnov is undefined, cost_base
+# - where cost_bnov is defined, cost_bnov * cost_base
+cm = np.zeros_like(cost_base) -np.inf
+base_inds = ~np.isinf(cost_base)
+bnov_inds = ~np.isinf(cost_bnov)
+cm[base_inds] = cost_base[base_inds]
+cm1 = cm.copy()
+cm2 = cm.copy()
+cm1[bnov_inds] *= cost_bnov[bnov_inds]
+cm2[bnov_inds] += cost_brep[bnov_inds]-.5
+info, path = decode_transition_matrix(cm1)
+info, path = decode_transition_matrix(cm2)
+info, path = decode_3d_transition_matrix(np.stack((cm1,cm2),axis=2))
+plt.clf(),plt.imshow(cost_bnov)
+plt.savefig("tmp2.pdf")
+plt.
 cost_bnov_orig = cost_bnov.copy()
 cost_bnov[np.isinf(cost_bnov)] = np.max(cost_base)
 cost_bnov += np.tril(cost_base)
-info, path = decode_transition_matrix(cost_base + cost_bnov)
-plt.clf(),plot_slices(np.stack((mat, cost_bnov_orig, cost_base, cost_base + cost_bnov),axis=2))
-cost_bnov[0,2]
-
+info, path = decode_transition_matrix(cost_base * cost_bnov)
+info, path = decode_transition_matrix(cost_base)
+info, path = decode_transition_matrix(cost_bnov)
+plt.clf(),plot_slices(np.stack((mat_pad, cost_base, cost_bnov, cost_brep),axis=2))
 
 mat = setup_toy_cm(8,[(4,[0,4])], None)
 
