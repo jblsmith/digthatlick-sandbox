@@ -58,6 +58,43 @@ def parse_annotation(ind):
 	# all_onsets = list(itertools.chain.from_iterable(all_onsets))
 	return ann_json, part_names, part_types, part_forms, part_onsets, all_onsets, duration
 
+def parse_all_annotations():
+	all_names = []
+	all_types = []
+	all_forms = []
+	all_onsets = []
+	all_offsets = []
+	all_inds = []
+	part_lens = []
+	jaah_info = pd.read_csv("audio_paths_index.csv")
+	for ind in jaah_info.index:
+		try:
+			ann_json, part_names, part_types, part_forms, part_onsets, all_ons, duration = parse_annotation(ind)
+			all_names += [p.strip().lower() for p in part_names]
+			all_types += [p.strip().lower() for sub_list in part_types for p in sub_list if p]
+			all_forms += [p.strip().lower() for sub_list in part_forms for p in sub_list if p]
+			all_onsets += part_onsets
+			all_offsets += part_onsets[1:] + [duration]
+			part_lens += [len(p) for p in all_ons]
+			all_inds += [ind]*len(part_names)
+		except:
+			print("Failed on {0}".format(ind))
+	instrument_list = ['trumpet', 'trombone', 'clarinet', 'piano', 'sax', 'vocals', 'drums', 'horn', 'cornet', 'ensemble', 'vibraphone', 'guitar', 'banjo', 'scat', 'bass']
+	instrument_qualifiers = ['alto', 'tenor', 'bari', 'soprano', 'male', 'female']
+	func_list = ['solo', 'intro', 'outro', 'head', 'pickup', 'collective', 'improvisation', 'code', 'bridge']
+	block_words = ['-']
+	df = pd.DataFrame(data=all_names, columns=['part_name'])
+	df['ind'] = all_inds
+	df['onset'] = all_onsets
+	df['offset'] = all_offsets
+	df['n_beats'] = part_lens
+	df['words'] = [[word.replace(",","") for word in title.split()] for title in all_names]
+	df['instruments'] = [[w for w in word_list if w in instrument_list] for word_list in df['words']]
+	df['inst_qualifiers'] = [[w for w in word_list if w in instrument_qualifiers] for word_list in df['words']]
+	df['funcs'] = [[w for w in word_list if w in func_list] for word_list in df['words']]
+	df['residual'] = [[w for w in word_list if w not in func_list+instrument_list+block_words+instrument_qualifiers] for word_list in df['words']]
+	return df
+
 def get_basic_feats(ind):
 	jaah_info = pd.read_csv("audio_paths_index.csv")
 	audio_path = jaah_info.audio_path[ind]
