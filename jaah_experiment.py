@@ -74,7 +74,7 @@ def parse_all_annotations():
 			all_types += [p.strip().lower() for sub_list in part_types for p in sub_list if p]
 			all_forms += [p.strip().lower() for sub_list in part_forms for p in sub_list if p]
 			all_onsets += part_onsets
-			all_offsets += part_onsets[1:] + [duration]
+			all_offsets += part_onsets[1:] + [float(duration)]
 			part_lens += [len(p) for p in all_ons]
 			all_inds += [ind]*len(part_names)
 		except:
