@@ -145,6 +145,31 @@ def script_2_load_all_info_50_percent(song_id_list, layer):
 	metadata_columns = collect_info(song_id_list[0],layer)[-1]
 	return images_proc, songvecs, onehots, metadata_columns
 
+def split_data_with_indices(input_data, class_data, block_data, test_indices):
+	test_index = np.zeros_like(block_data).astype(int)
+	for ti in test_indices:
+		test_index[block_data==ti] = True
+	train_index = 1-test_index
+	train_X = input_data[train_index==1, :, :, :]
+	test_X = input_data[test_index==1, :, :, :]
+	train_y = class_data[train_index==1,:]
+	test_y = class_data[test_index==1,:]
+	return train_X, test_X, train_y, test_y
+
+def script_for_basic_model(input_shape, n_layers=2):
+	model = keras.models.Sequential()
+	conv_filters = 32   # number of convolution filters (= CNN depth)
+	# 1st Layer
+	for _ in range(n_layers):
+		model.add(keras.layers.Convolution2D(conv_filters, (3, 3), input_shape=input_shape))
+		model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
+	# Dropout
+	model.add(keras.layers.Dropout(rate=0.25))
+	# rate = (1 - keep_prob)
+	model.add(keras.layers.Flatten()) 
+	model.add(keras.layers.Dense(256, activation='sigmoid')) 
+	model.add(keras.layers.Dense(n_classes,activation='sigmoid'))
+	return model
 
 # Next up:
 # - compute feats over a bunch of files
@@ -164,77 +189,45 @@ no_instrument = np.all(1-onehots,axis=1)*1
 onehots_full = np.insert(onehots,onehots.shape[1],no_instrument,axis=1)
 metadata_columns += ['no_instrument']
 
-# all_lists = [collect_info_subsample(song_id, 0.2) for song_id in song_id_list]
-# alldata, alltime, allvec, allmeta, allonehot = zip(*all_lists)
-# all_data = np.concatenate(alldata)
-# all_data_proc = add_channel(standardize(all_data))
-# all_meta_songid = np.concatenate(allvec)
-# all_meta_onehots = np.concatenate(allonehot)
-# metadata_full = pd.DataFrame(all_meta_onehots, columns=allmeta[0])
-
-# song_id_list = song_id_list[:25]
-# all_data = np.concatenate([np.load(MFSG_SONG_PATH_PATTERN % song_id)['feat'] for song_id in song_id_list], axis=0)
-# all_data_proc = add_channel(standardize(all_data))
-# all_times_list = [np.load(MFSG_SONG_PATH_PATTERN % song_id)['t'] for song_id in song_id_list]
-# all_meta_songid = np.concatenate([np.ones((len(all_times_list[i])))*song_id_list[i] for i in range(len(all_times_list))])
-# all_meta_onehots = np.concatenate([make_1hot_for_col(song_id_list[i], 'funcs', all_times_list[i])[0] for i in range(len(all_times_list))], axis=0)
-# onehot_columns = make_1hot_for_col(song_id_list[0], 'funcs', all_times_list[0])[1]
-# metadata_full = pd.DataFrame(all_meta_onehots, columns=onehot_columns)
+brass = np.sum(onehots[:,[metadata_columns.index("trumpet"), metadata_columns.index("trombone"), metadata_columns.index("horn"), metadata_columns.index("cornet")]],axis=1)
+metadata = np.stack((brass, 1-brass),axis=1)
 # Define solo vs. non-solo detection task:
-solo = 1*(1<= (metadata_full.solo + metadata_full.improvisation))
-nonsolo = 1-solo
-metadata = np.stack((solo,nonsolo),axis=1)
-input_shape = all_data_proc.shape[1:]
+# solo = 1*(1<= (metadata_full.solo + metadata_full.improvisation))
+# metadata = np.stack((solo,1-solo),axis=1)
+input_shape = images_proc.shape[1:]
 train_ranges, test_ranges, n_splits = produce_splits(song_id_list, 0.05)
 
-
 results = []
+loss = 'binary_crossentropy'  # 'categorical_crossentropy' for multi-class problems
+optimizer = 'sgd' 
+metrics = ['accuracy']
+batch_size = 32
+epochs = 5
 for split_i in range(5):
-	test_index = np.zeros_like(all_meta_songid).astype(int)
-	for ti in test_ranges[split_i]:
-		test_index[all_meta_songid==ti] = True
-	train_index = 1-test_index
-	train_X = all_data_proc[train_index==1, :, :, :]
-	test_X = all_data_proc[test_index==1, :, :, :]
-	train_y = metadata[train_index==1,:]
-	test_y = metadata[test_index==1,:]
+	train_X, test_X, train_y, test_y = split_data_with_indices(images_proc, metadata, songvecs, test_ranges[split_i])
 	n_classes = metadata.shape[1]
-	
-	#np.random.seed(0) # make results repeatable
-	
-	model = keras.models.Sequential()
-	conv_filters = 32   # number of convolution filters (= CNN depth)
-	# 1st Layer
-	model.add(keras.layers.Convolution2D(conv_filters, (3, 3), input_shape=input_shape))
-	model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
-	# 2nd Layer
-	model.add(keras.layers.Convolution2D(conv_filters, (3, 3)))
-	model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
-	model.add(keras.layers.Convolution2D(conv_filters, (3, 3)))
-	model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
-	# Dropout
-	model.add(keras.layers.Dropout(rate=0.25))
-	# rate = (1 - keep_prob)
-	model.add(keras.layers.Flatten()) 
-	model.add(keras.layers.Dense(256, activation='sigmoid')) 
-	model.add(keras.layers.Dense(n_classes,activation='sigmoid'))
-	# model.summary()
-	loss = 'binary_crossentropy'  # 'categorical_crossentropy' for multi-class problems
-	optimizer = 'sgd' 
-	metrics = ['accuracy']
-	batch_size = 32
+	model = script_for_basic_model(input_shape, n_layers=2)
 	model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
-	epochs = 1
 	history = model.fit(train_X, train_y, batch_size=batch_size, epochs=epochs)
 	test_pred = model.predict_classes(test_X)
-	test_pred[0:10]
+	# test_pred[0:10]
 	pred_split = np.sum(test_pred)/len(test_pred)
 	# 1 layer
-	acc = sklearn.metrics.accuracy_score(test_y[:,0], test_pred)
+	acc = sklearn.metrics.accuracy_score(test_y[:,1], test_pred)
 	# Baseline performance:
 	baseline_acc = np.max(np.sum(metadata,axis=0))/np.sum(metadata)
-	results += [[acc, baseline_acc, pred_split]]
+	results += [[acc, baseline_acc, pred_split, history, model]]
 	print(results)
+
+# Example results after 5 epochs:
+# >>> results
+# [[0.8663003663003663, 0.8397278397278397, 0.9642857142857143, <keras.callbacks.History object at 0x130e63b00>, <keras.engine.sequential.Sequential object at 0x134555198>]]
+# >>> history.history
+# {'loss': [0.4264688369071449, 0.38982690172228984, 0.3808055007847274, 0.3722048993402934, 0.3642222402919396], 'acc': [0.8266693728193202, 0.8429064339798154, 0.8476422434004449, 0.8528516338986301, 0.8575197889706285]}
+
+
+
+
 
 
 # # 2) Genre Classification
@@ -242,120 +235,8 @@ for split_i in range(5):
 # In this Genre classification task, we have multiple classes, but the decision has to be made for 1 target class.
 # This is called a single-label / multi-class task (as opposed to a multi-label task).
 
-# ## Load Audio Spectrograms
-# 
-# We prepared already the Mel spectrograms for the audio files used in this task.
-
-# In[70]:
-
-
-task = 'genres'
-
-# load Mel spectrograms
-spectrogram_file = SPECTROGRAM_FILE_PATTERN % task
-spectrograms, spectrograms_clip_ids = load_spectrograms(spectrogram_file)
-
-# standardize
-data = standardize(spectrograms)
-data.shape # verify the shape of the loaded & standardize spectrograms
-
-
-# ## Load Metadata
-
-# In[71]:
-
-
-# use META_FILE_PATTERN to load the correct metadata file. set correct METADATA_PATH above
-csv_file = LABEL_FILE_PATTERN % task
-metadata = pd.read_csv(csv_file, index_col=0) #, sep='\t')
-metadata.shape
-
-
-# In[72]:
-
-
-metadata.head()
-
-
-# In[73]:
-
-
-# how many tracks per genre
-metadata.sum()
-
-
-# #### Baseline:
-# 
-# A 'dumb' classifier could assign all predictions to the biggest class. The number of tracks belonging to the biggest class divided by the total number of tracks in the dataset is our baseline accuracy in %.
-
-# In[74]:
-
-
-# baseline: 
+baseline:
 metadata.sum().max() / len(metadata)
-
-
-# ### Align Metadata and Spectrograms
-
-# In[75]:
-
-
-# check if we find all metadata clip ids in our spectrogram data
-len(set(metadata.index).intersection(set(spectrograms_clip_ids)))
-
-
-# In[76]:
-
-
-spec_indices = spectrograms_clip_ids.loc[metadata.index]['spec_id']
-data = spectrograms[spec_indices,:]
-data.shape
-
-
-# ### Create Train X and Y: data and classes
-
-# In[77]:
-
-
-# classes needs to be a "1-hot encoded" numpy array (which our groundtruth already is! we just convert pandas to numpy)
-classes = metadata.values
-classes
-
-
-# In[78]:
-
-
-n_classes = metadata.shape[1]
-
-
-# In[79]:
-
-
-# add channel (see above)
-data = add_channel(data)
-data.shape
-
-
-# In[80]:
-
-
-# input_shape: we store the new shape of the images in the 'input_shape' variable.
-# take all dimensions except the 0th one (which is the number of files)
-input_shape = data.shape[1:]  
-input_shape
-
-
-# ### Train & Test Set Split
-# 
-# We split the original full data set into two parts: Train Set (75%) and Test Set (25%).
-
-# In[81]:
-
-
-testset_size = 0.25 # % portion of whole data set to keep for testing, i.e. 75% is used for training
-
-
-# In[82]:
 
 
 # Stratified Split retains the class balance in both sets
@@ -369,13 +250,6 @@ for train_index, test_index in splits:
     train_classes = classes[train_index]
     test_classes = classes[test_index]
 # Note: this for loop is only executed once if n_splits==1
-
-
-# In[83]:
-
-
-print(train_set.shape)
-print(test_set.shape)
 
 
 # ## Model: Compact CNN
@@ -428,38 +302,12 @@ def CompactCNN(input_shape, nb_conv, nb_filters, normalize, nb_hidden, dense_uni
     elif normalize in ('no', 'False'):
         x = melgram_input
 
-    # Conv block 1
-    x = Convolution2D(nb_filters[0], (3, 3), padding='same')(x)
-    x = BatchNormalization(axis=channel_axis, name='bn1')(x)
-    x = ELU()(x)
-    x = MaxPooling2D(pool_size=poolings[0], name='pool1')(x)
-        
-    # Conv block 2
-    x = Convolution2D(nb_filters[1], (3, 3), padding='same')(x)
-    x = BatchNormalization(axis=channel_axis, name='bn2')(x)
-    x = ELU()(x)
-    x = MaxPooling2D(pool_size=poolings[1], name='pool2')(x)
-        
-    # Conv block 3
-    x = Convolution2D(nb_filters[2], (3, 3), padding='same')(x)
-    x = BatchNormalization(axis=channel_axis, name='bn3')(x)
-    x = ELU()(x)
-    x = MaxPooling2D(pool_size=poolings[2], name='pool3')(x)
-    
-    # Conv block 4
-    if nb_conv > 3:        
-        x = Convolution2D(nb_filters[3], (3, 3), padding='same')(x)
-        x = BatchNormalization(axis=channel_axis, name='bn4')(x)
-        x = ELU()(x)   
-        x = MaxPooling2D(pool_size=poolings[3], name='pool4')(x)
-        
-    # Conv block 5
-    if nb_conv == 5:
-        x = Convolution2D(nb_filters[4], (3, 3), padding='same')(x)
-        x = BatchNormalization(axis=channel_axis, name='bn5')(x)
-        x = ELU()(x)
-        x = MaxPooling2D(pool_size=poolings[4], name='pool5')(x)
-
+    # Conv blocks
+	for i in nb_conv:
+	    x = Convolution2D(nb_filters[nb_conv], (3, 3), padding='same')(x)
+	    x = BatchNormalization(axis=channel_axis, name='bn'+str(i+1))(x)
+	    x = ELU()(x)
+	    x = MaxPooling2D(pool_size=poolings[i], name='pool'+str(i+1))(x)
     # Flatten the outout of the last Conv Layer
     x = Flatten()(x)
       
