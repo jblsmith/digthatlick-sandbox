@@ -73,7 +73,7 @@ def compute_feat_for_file(song_id, feat_name='mfsg'):
 def script_1_computing_mfsg():
 	global INFO_DF
 	song_inds = np.unique(INFO_DF.ind)
-	for song_id in song_inds[:30]:
+	for song_id in song_inds[30:]:
 		print(song_id, JAAH_INFO.audio_exists.loc[song_id])
 		if JAAH_INFO.audio_exists.loc[song_id]:
 			compute_feat_for_file(song_id, 'mfsg')
@@ -113,153 +113,128 @@ def produce_splits(id_list, test_percent):
 	n_splits = len(first_is)
 	return train_ranges, test_ranges, n_splits
 
+def collect_info(song_id, layer='funcs'):
+	global INFO_DF
+	assert layer in INFO_DF.columns
+	MFSG_SONG_PATH_PATTERN = os.path.join(MY_BASE_PATH, 'jaah_song_%s_mfsg.npz')
+	data = np.load(MFSG_SONG_PATH_PATTERN % song_id)['feat']
+	times = np.load(MFSG_SONG_PATH_PATTERN % song_id)['t']
+	song_id_vector = np.ones(len(times))*song_id
+	onehot_columns, meta_categories = make_1hot_for_col([song_id], layer, times)
+	return data, times, song_id_vector, onehot_columns, meta_categories
+
+def subsample_lists(array_list, n_to_keep=None, percent_keep=None, shuffle=True):
+	assert ((n_to_keep is not None) or (percent_keep is not None))
+	indices = range(array_list[0].shape[0])
+	if shuffle:
+		indices = sp.random.permutation(indices)
+	if n_to_keep is not None:
+		indices = indices[:n_to_keep]
+	elif percent_keep is not None:
+		n_to_keep = int(len(indices)*percent_keep)
+		indices = indices[:n_to_keep]
+	return [item[indices] for item in array_list]
+
+def script_2_load_all_info_50_percent(song_id_list, layer):
+	all_lists = [subsample_lists(collect_info(song_id,layer)[:-1], percent_keep=0.5) for song_id in song_id_list]
+	images, times, songvecs, onehots = zip(*all_lists)
+	images = np.concatenate(images)
+	images_proc = add_channel(standardize(images))
+	songvecs = np.concatenate(songvecs)
+	onehots = np.concatenate(onehots)
+	metadata_columns = collect_info(song_id_list[0],layer)[-1]
+	return images_proc, songvecs, onehots, metadata_columns
+
 
 # Next up:
 # - compute feats over a bunch of files
 # - concatenate feats and categories over files
 # - normalize features (create normalization function and apply)
-- create test/train splits over files
-- test algorithm on files
+# - create test/train splits over files
+# - test algorithm on files
 
 
 MFSG_SONG_PATH_PATTERN = os.path.join(MY_BASE_PATH, 'jaah_song_%s_mfsg.npz')
 audio_exists = JAAH_INFO.loc[JAAH_INFO.audio_exists].iloc[:,0].values
 song_id_list = sorted(list(set.intersection(set(audio_exists), set(np.unique(INFO_DF.ind)))))
-song_id_list = song_id_list[:25]
-all_data = np.concatenate([np.load(MFSG_SONG_PATH_PATTERN % song_id)['feat'] for song_id in song_id_list], axis=0)
-all_data_proc = add_channel(standardize(all_data))
-all_times_list = [np.load(MFSG_SONG_PATH_PATTERN % song_id)['t'] for song_id in song_id_list]
-all_meta_songid = np.concatenate([np.ones((len(all_times_list[i])))*song_id_list[i] for i in range(len(all_times_list))])
-all_meta_onehots = np.concatenate([make_1hot_for_col(song_id_list[i], 'funcs', all_times_list[i])[0] for i in range(len(all_times_list))], axis=0)
-onehot_columns = make_1hot_for_col(song_id_list[0], 'funcs', all_times_list[0])[1]
-metadata_full = pd.DataFrame(all_meta_onehots, columns=onehot_columns)
+images_proc, songvecs, onehots, metadata_columns = script_2_load_all_info_50_percent(song_id_list, 'instruments')
+
+# Add a 'no instrument' column
+no_instrument = np.all(1-onehots,axis=1)*1
+onehots_full = np.insert(onehots,onehots.shape[1],no_instrument,axis=1)
+metadata_columns += ['no_instrument']
+
+# all_lists = [collect_info_subsample(song_id, 0.2) for song_id in song_id_list]
+# alldata, alltime, allvec, allmeta, allonehot = zip(*all_lists)
+# all_data = np.concatenate(alldata)
+# all_data_proc = add_channel(standardize(all_data))
+# all_meta_songid = np.concatenate(allvec)
+# all_meta_onehots = np.concatenate(allonehot)
+# metadata_full = pd.DataFrame(all_meta_onehots, columns=allmeta[0])
+
+# song_id_list = song_id_list[:25]
+# all_data = np.concatenate([np.load(MFSG_SONG_PATH_PATTERN % song_id)['feat'] for song_id in song_id_list], axis=0)
+# all_data_proc = add_channel(standardize(all_data))
+# all_times_list = [np.load(MFSG_SONG_PATH_PATTERN % song_id)['t'] for song_id in song_id_list]
+# all_meta_songid = np.concatenate([np.ones((len(all_times_list[i])))*song_id_list[i] for i in range(len(all_times_list))])
+# all_meta_onehots = np.concatenate([make_1hot_for_col(song_id_list[i], 'funcs', all_times_list[i])[0] for i in range(len(all_times_list))], axis=0)
+# onehot_columns = make_1hot_for_col(song_id_list[0], 'funcs', all_times_list[0])[1]
+# metadata_full = pd.DataFrame(all_meta_onehots, columns=onehot_columns)
 # Define solo vs. non-solo detection task:
 solo = 1*(1<= (metadata_full.solo + metadata_full.improvisation))
 nonsolo = 1-solo
 metadata = np.stack((solo,nonsolo),axis=1)
 input_shape = all_data_proc.shape[1:]
-train_ranges, test_ranges, n_splits = produce_splits(song_id_list, 0.25)
-
-split_i = 0
-test_index = np.zeros_like(all_meta_songid).astype(int)
-for ti in test_ranges[split_i]:
-	test_index[all_meta_songid==ti] = True
-
-train_index = 1-test_index
-train_X = all_data_proc[train_index==1, :, :, :]
-test_X = all_data_proc[test_index==1, :, :, :]
-train_y = metadata[train_index==1,:]
-test_y = metadata[test_index==1,:]
-n_classes = metadata.shape[1]
-
-#np.random.seed(0) # make results repeatable
-
-model = keras.models.Sequential()
-conv_filters = 32   # number of convolution filters (= CNN depth)
-# 1st Layer
-model.add(keras.layers.Convolution2D(conv_filters, (3, 3), input_shape=input_shape))
-model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
-# 2nd Layer
-model.add(keras.layers.Convolution2D(conv_filters, (3, 3)))
-model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
-model.add(keras.layers.Convolution2D(conv_filters, (3, 3)))
-model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
-# Dropout
-model.add(keras.layers.Dropout(rate=0.25))
-# rate = (1 - keep_prob)
-model.add(keras.layers.Flatten()) 
-model.add(keras.layers.Dense(256, activation='sigmoid')) 
-model.add(keras.layers.Dense(n_classes,activation='sigmoid'))
-
-model.summary()
-
-loss = 'binary_crossentropy'  # 'categorical_crossentropy' for multi-class problems
-optimizer = 'sgd' 
-metrics = ['accuracy']
-batch_size = 32
-model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
-
-epochs = 1
-history = model.fit(train_X, train_y, batch_size=batch_size, epochs=epochs)
-
-test_pred = model.predict_classes(test_X)
-test_pred[0:10]
-np.sum(test_pred)/len(test_pred)
-# 1 layer
-sklearn.metrics.accuracy_score(test_y[:,0], test_pred)
+train_ranges, test_ranges, n_splits = produce_splits(song_id_list, 0.05)
 
 
-# ## Additional Parameters & Techniques
-# 
-# **Exercise:** Try out more parameters and techniques: comment/uncomment appropriate lines of code below:
-# * add ReLU activation
-# * add Batch normalization
-# * add Dropout on multiple layers
-
-# In[207]:
-
-
-model = Sequential()
-
-conv_filters = 16   # number of convolution filters (= CNN depth)
-filter_size = (3,3)
-pool_size = (2,2)
-
-# Layer 1
-model.add(Convolution2D(conv_filters, filter_size, padding='valid', input_shape=input_shape))
-# model.add(BatchNormalization())
-# model.add(Activation('relu')) 
-model.add(MaxPooling2D(pool_size=pool_size)) 
-# model.add(Dropout(0.3))
-
-# Layer 2
-model.add(Convolution2D(conv_filters, filter_size, padding='valid', input_shape=input_shape))
-# model.add(BatchNormalization())
-# model.add(Activation('relu')) 
-model.add(MaxPooling2D(pool_size=pool_size)) 
-# model.add(Dropout(0.1))
-
-# In order to feed this to a Full(Dense) layer, we need to flatten all data
-model.add(Flatten()) 
-
-# Full layer
-model.add(Dense(256))  
-# model.add(Activation('relu'))
-# model.add(Dropout(0.1))
-
-# Output layer
-# For binary/2-class problems use ONE sigmoid unit, 
-# for multi-class/multi-label problems use n output units and activation='softmax!'
-model.add(Dense(n_classes,activation='sigmoid'))
-
-
-# In[208]:
-
-
-model.summary()
-
-
-# In[209]:
-
-
-# Compile the model
-model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
-
-
-# In[210]:
-
-
-# Train the model
-epochs = 10
-history = model.fit(train_set, train_classes, batch_size=32, epochs=epochs)
-
-
-# In[211]:
-
-
-# Verify Accuracy on Test Set
-test_pred = model.predict_classes(test_set)
-accuracy_score(test_classes, test_pred)
+results = []
+for split_i in range(5):
+	test_index = np.zeros_like(all_meta_songid).astype(int)
+	for ti in test_ranges[split_i]:
+		test_index[all_meta_songid==ti] = True
+	train_index = 1-test_index
+	train_X = all_data_proc[train_index==1, :, :, :]
+	test_X = all_data_proc[test_index==1, :, :, :]
+	train_y = metadata[train_index==1,:]
+	test_y = metadata[test_index==1,:]
+	n_classes = metadata.shape[1]
+	
+	#np.random.seed(0) # make results repeatable
+	
+	model = keras.models.Sequential()
+	conv_filters = 32   # number of convolution filters (= CNN depth)
+	# 1st Layer
+	model.add(keras.layers.Convolution2D(conv_filters, (3, 3), input_shape=input_shape))
+	model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
+	# 2nd Layer
+	model.add(keras.layers.Convolution2D(conv_filters, (3, 3)))
+	model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
+	model.add(keras.layers.Convolution2D(conv_filters, (3, 3)))
+	model.add(keras.layers.MaxPooling2D(pool_size=(2, 2))) 
+	# Dropout
+	model.add(keras.layers.Dropout(rate=0.25))
+	# rate = (1 - keep_prob)
+	model.add(keras.layers.Flatten()) 
+	model.add(keras.layers.Dense(256, activation='sigmoid')) 
+	model.add(keras.layers.Dense(n_classes,activation='sigmoid'))
+	# model.summary()
+	loss = 'binary_crossentropy'  # 'categorical_crossentropy' for multi-class problems
+	optimizer = 'sgd' 
+	metrics = ['accuracy']
+	batch_size = 32
+	model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
+	epochs = 1
+	history = model.fit(train_X, train_y, batch_size=batch_size, epochs=epochs)
+	test_pred = model.predict_classes(test_X)
+	test_pred[0:10]
+	pred_split = np.sum(test_pred)/len(test_pred)
+	# 1 layer
+	acc = sklearn.metrics.accuracy_score(test_y[:,0], test_pred)
+	# Baseline performance:
+	baseline_acc = np.max(np.sum(metadata,axis=0))/np.sum(metadata)
+	results += [[acc, baseline_acc, pred_split]]
+	print(results)
 
 
 # # 2) Genre Classification
