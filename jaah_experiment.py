@@ -59,6 +59,7 @@ def parse_annotation(ind):
 	return ann_json, part_names, part_types, part_forms, part_onsets, all_onsets, duration
 
 def parse_all_annotations():
+	print("Parsing annotations for JAAH dataset...")
 	all_names = []
 	all_types = []
 	all_forms = []
