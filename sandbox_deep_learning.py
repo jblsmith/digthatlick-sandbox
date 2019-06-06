@@ -1,50 +1,50 @@
 from deep_learning_utils import *
 
-# Next up:
-# - compute feats over a bunch of files
-# - concatenate feats and categories over files
-# - normalize features (create normalization function and apply)
-# - create test/train splits over files
-# - test algorithm on files
-
-
+# Define set of songs to analyse, and load pre-computed Mel-frequency spectrum frames.
 MFSG_SONG_PATH_PATTERN = os.path.join(MY_BASE_PATH, 'jaah_song_%s_mfsg.npz')
 audio_exists = JAAH_INFO.loc[JAAH_INFO.audio_exists].iloc[:,0].values
 song_id_list = sorted(list(set.intersection(set(audio_exists), set(np.unique(INFO_DF.ind)))))
-images_proc, songvecs, onehots, metadata_columns = script_2_load_percent_of_all_info(song_id_list, 'instruments', percent_keep=0.1)
+images_proc, songvecs, onehots, metadata_columns = script_2_load_percent_of_all_info(song_id_list, 'instruments', percent_keep=0.2)
 
-# Add a 'no instrument' column
-no_instrument = np.all(1-onehots,axis=1)*1
-onehots_full = np.insert(onehots,onehots.shape[1],no_instrument,axis=1)
-metadata_columns += ['no_instrument']
 
+# Define a bunch of instrument categories:
+# metadata_columns is: ['banjo', 'bass', 'clarinet', 'cornet', 'drums', 'ensemble', 'guitar', 'horn', 'piano', 'sax', 'scat', 'trombone', 'trumpet', 'vibraphone', 'vocals', 'no_instrument']
 brass = np.sum(onehots[:,[metadata_columns.index(instr) for instr in ["trumpet", "trombone", "horn", "cornet"]]],axis=1)
 reed = np.sum(onehots[:,[metadata_columns.index(instr) for instr in ["clarinet", "sax"]]],axis=1)
 pluck = np.sum(onehots[:,[metadata_columns.index(instr) for instr in ["banjo", "guitar", "bass"]]],axis=1)
 percussion = np.sum(onehots[:,[metadata_columns.index(instr) for instr in ["drums", "sax"]]],axis=1)
 keyboard = np.sum(onehots[:,[metadata_columns.index(instr) for instr in ["piano", "vibraphone"]]],axis=1)
 vocal = np.sum(onehots[:,[metadata_columns.index(instr) for instr in ["vocals", "scat"]]],axis=1)
-other = np.sum(onehots[:,[metadata_columns.index(instr) for instr in ["ensemble"]]],axis=1)
-metadata = np.stack((brass, reed, pluck, percussion, keyboard, vocal, other),axis=1)
-# metadata = metadata.append(1-np.max(metadata,axis=1))
-# ['banjo', 'bass', 'clarinet', 'cornet', 'drums', 'ensemble', 'guitar', 'horn', 'piano', 'sax', 'scat', 'trombone', 'trumpet', 'vibraphone', 'vocals', 'no_instrument']
-metadata = np.stack((brass, 1-brass),axis=1)
-# Define solo vs. non-solo detection task:
-# solo = 1*(1<= (metadata_full.solo + metadata_full.improvisation))
-# metadata = np.stack((solo,1-solo),axis=1)
-input_shape = images_proc.shape[1:]
-train_ranges, test_ranges, n_splits = produce_splits(song_id_list, 0.05)
+other = np.sum(onehots[:,[metadata_columns.index(instr) for instr in ["ensemble","no_instrument"]]],axis=1)
 
-results = []
+# Define data splits:
+input_shape = images_proc.shape[1:]
+train_ranges, test_ranges, n_splits = produce_splits(song_id_list, 0.1)
+n_splits = 1
+
+#
+#	Create a single-label classifier
+#
+# The data where no instrument is "soloing" will still feature a prominent instrument, and we don't know what it is right now.
+# So, let's remove them all from the training data:
+keep_inds = [i for i in range(other.shape[0]) if other[i]==0]
+images_proc = images_proc[keep_inds]
+songvecs = songvecs[keep_inds]
+onehots = onehots[keep_inds]
+# Classes should be a one-hot matrix.
+classes = np.stack((brass, 1-brass),axis=1)
+classes = classes[keep_inds]
+n_classes = classes.shape[1]
+
+results_log = []
 loss = 'binary_crossentropy'  # 'categorical_crossentropy' for multi-class problems
 optimizer = 'sgd' 
 metrics = ['accuracy']
 batch_size = 32
 epochs = 5
-for split_i in range(5):
-	train_X, test_X, train_y, test_y = split_data_with_indices(images_proc, metadata, songvecs, test_ranges[split_i])
-	n_classes = metadata.shape[1]
-	model = script_for_basic_model(input_shape, n_layers=2)
+for split_i in range(n_splits):
+	train_X, test_X, train_y, test_y = split_data_with_indices(images_proc, classes, songvecs, test_ranges[split_i])
+	model = script_for_basic_model(input_shape, n_classes, n_layers=2)
 	model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
 	history = model.fit(train_X, train_y, batch_size=batch_size, epochs=epochs)
 	test_pred = model.predict_classes(test_X)
@@ -54,36 +54,33 @@ for split_i in range(5):
 	acc = sklearn.metrics.accuracy_score(test_y[:,1], test_pred)
 	# Baseline performance:
 	baseline_acc = np.max(np.sum(metadata,axis=0))/np.sum(metadata)
-	results += [[acc, baseline_acc, pred_split, history, model]]
+	results_log += [[acc, baseline_acc, pred_split, history, model]]
 	print(results)
 
-# Example results after 5 epochs:
-# >>> results
-# [[0.8663003663003663, 0.8397278397278397, 0.9642857142857143, <keras.callbacks.History object at 0x130e63b00>, <keras.engine.sequential.Sequential object at 0x134555198>]]
-# >>> history.history
-# {'loss': [0.4264688369071449, 0.38982690172228984, 0.3808055007847274, 0.3722048993402934, 0.3642222402919396], 'acc': [0.8266693728193202, 0.8429064339798154, 0.8476422434004449, 0.8528516338986301, 0.8575197889706285]}
+
+# Next step will be actually making a decision for each moment in a song to produce a segmentation.
+split_i = 0
+model = results_log[split_i][4]
+for i,song_i in enumerate(test_ranges[split_i]):
+	print(i)
+	# But how do we ACTUALLY implement prediction for a given song?
+	song_i_images, song_i_vec, song_i_1hot, song_i_md_cols = script_2_load_percent_of_all_info([song_i], 'instruments', percent_keep=1, shuffle=False)
+	true_brass = np.sum(song_i_1hot[:,[metadata_columns.index(instr) for instr in ["trumpet", "trombone", "horn", "cornet"]]],axis=1)
+	song_i_preds = model.predict_proba(song_i_images)
+	plt.clf()
+	plt.plot(song_i_preds[:,0])
+	plt.plot(true_brass)
+	plt.savefig("tmp_#{0}.pdf".format(song_i))
 
 
-
-
+#
+#	Create a multi-label classifier
+#
+# Metadata should be a one-hot matrix.
+classes = np.stack((brass, reed, pluck, percussion, keyboard, vocal, other),axis=1)
+n_classes = classes.shape[1]
 
 ##### All-instrument classification
-
-# Loading data, same as before
-MFSG_SONG_PATH_PATTERN = os.path.join(MY_BASE_PATH, 'jaah_song_%s_mfsg.npz')
-audio_exists = JAAH_INFO.loc[JAAH_INFO.audio_exists].iloc[:,0].values
-song_id_list = sorted(list(set.intersection(set(audio_exists), set(np.unique(INFO_DF.ind)))))
-images_proc, songvecs, onehots, metadata_columns = script_2_load_percent_of_all_info(song_id_list, 'instruments', percent_keep=0.05)
-# Add a 'no instrument' column
-no_instrument = np.all(1-onehots,axis=1)*1
-onehots_full = np.insert(onehots,onehots.shape[1],no_instrument,axis=1)
-metadata_columns += ['no_instrument']
-
-# Train/test splits
-input_shape = images_proc.shape[1:]
-train_ranges, test_ranges, n_splits = produce_splits(song_id_list, 0.05)
-classes = metadata
-n_classes = classes.shape[1]
 
 results = []
 loss = 'binary_crossentropy' 
@@ -96,7 +93,7 @@ validation_split = 0.1
 for split_i in range(5):
 	train_X, test_X, train_y, test_y = split_data_with_indices(images_proc, metadata, songvecs, test_ranges[split_i])
 	n_classes = metadata.shape[1]
-	model = script_for_basic_model(input_shape, n_layers=2)
+	model = script_for_basic_model(input_shape, n_classes, n_layers=2)
 	model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
 	history = model.fit(train_X, train_y, batch_size=batch_size, epochs=epochs, validation_split=validation_split)
 	test_pred = model.predict_classes(test_X)

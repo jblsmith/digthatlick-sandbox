@@ -132,7 +132,11 @@ def collect_info(song_id, layer='funcs'):
 	times = np.load(MFSG_SONG_PATH_PATTERN % song_id)['t']
 	song_id_vector = np.ones(len(times))*song_id
 	onehot_columns, meta_categories = make_1hot_for_col([song_id], layer, times)
-	return data, times, song_id_vector, onehot_columns, meta_categories
+	# Add a 'no instrument' column
+	no_instrument = np.all(1-onehot_columns,axis=1)*1
+	onehots_full = np.insert(onehot_columns,onehot_columns.shape[1],no_instrument,axis=1)
+	meta_categories += ['no_instrument']
+	return data, times, song_id_vector, onehots_full, meta_categories
 
 def subsample_lists(array_list, n_to_keep=None, percent_keep=None, shuffle=True):
 	assert ((n_to_keep is not None) or (percent_keep is not None))
@@ -146,8 +150,8 @@ def subsample_lists(array_list, n_to_keep=None, percent_keep=None, shuffle=True)
 		indices = indices[:n_to_keep]
 	return [item[indices] for item in array_list]
 
-def script_2_load_percent_of_all_info(song_id_list, layer, percent_keep):
-	all_lists = [subsample_lists(collect_info(song_id,layer)[:-1], percent_keep=percent_keep) for song_id in song_id_list]
+def script_2_load_percent_of_all_info(song_id_list, layer, percent_keep, shuffle=True):
+	all_lists = [subsample_lists(collect_info(song_id,layer)[:-1], percent_keep=percent_keep, shuffle=shuffle) for song_id in song_id_list]
 	images, times, songvecs, onehots = zip(*all_lists)
 	images = np.concatenate(images)
 	images_proc = add_channel(standardize_fbins_only(images))
@@ -167,7 +171,7 @@ def split_data_with_indices(input_data, class_data, block_data, test_indices):
 	test_y = class_data[test_index==1,:]
 	return train_X, test_X, train_y, test_y
 
-def script_for_basic_model(input_shape, n_layers=2):
+def script_for_basic_model(input_shape, n_classes, n_layers=2):
 	model = keras.models.Sequential()
 	conv_filters = 32   # number of convolution filters (= CNN depth)
 	# 1st Layer
@@ -181,7 +185,6 @@ def script_for_basic_model(input_shape, n_layers=2):
 	model.add(keras.layers.Dense(256, activation='sigmoid')) 
 	model.add(keras.layers.Dense(n_classes,activation='sigmoid'))
 	return model
-
 
 def CompactCNN(input_shape, nb_conv, nb_filters, normalize, nb_hidden, dense_units, 
 			   output_shape, activation, dropout, multiple_segments=False, input_tensor=None):
